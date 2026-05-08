@@ -255,11 +255,13 @@
 
 ### 3.1 三个分类器的不同角色
 
-| 分类器 | 作用 | 决策权重 | 是否 Speculative |
-|--------|------|----------|-----------------|
-| **deny** | 识别危险命令，直接拒绝 | 最高（先检查） | 否 |
-| **ask** | 识别需要人工判断的命令 | 中（其次检查） | 否 |
-| **allow** | 识别安全命令，自动放行 | 最低（最后检查） | **是** |
+
+| 分类器       | 作用          | 决策权重     | 是否 Speculative |
+| --------- | ----------- | -------- | -------------- |
+| **deny**  | 识别危险命令，直接拒绝 | 最高（先检查）  | 否              |
+| **ask**   | 识别需要人工判断的命令 | 中（其次检查）  | 否              |
+| **allow** | 识别安全命令，自动放行 | 最低（最后检查） | **是**          |
+
 
 ### 3.2 为什么 deny/ask 不需要 speculative？
 
@@ -393,37 +395,40 @@ API Stream          StreamingToolExecutor      useCanUseTool           BashPermi
 
 ## 六、相关代码位置速查
 
-| 功能 | 文件 | 关键函数/行 |
-|------|------|------------|
-| 流式触发 | `src/query.ts` | L830: `streamingToolExecutor.addTool()` |
-| Speculative 启动 | `src/services/tools/toolExecution.ts` | L747-765: `startSpeculativeClassifierCheck()` |
-| 并发执行器 | `src/services/tools/StreamingToolExecutor.ts` | `executeTool()`, `runToolUse()` |
-| 权限主入口 | `src/hooks/useCanUseTool.tsx` | `CanUseToolFn`, L61-352 |
-| Grace Period | `src/hooks/useCanUseTool.tsx` | L242-304: 2秒等待逻辑 |
-| Bash 权限决策 | `src/tools/BashTool/bashPermissions.ts` | `bashToolHasPermission()` |
-| 三分类器并行 | `src/tools/BashTool/bashPermissions.ts` | L1878-1896: deny/ask/allow 调用 |
-| Speculative 存储 | `src/tools/BashTool/bashPermissions.ts` | `speculativeClassifierChecks` Map |
-| 通用权限决策 | `src/utils/permissions/permissions.ts` | `hasPermissionsToUseToolInner()` |
-| 交互式处理 | `src/hooks/toolPermission/handlers/interactiveHandler.ts` | `handleInteractivePermission()` |
-| 异步分类检查 | `src/hooks/toolPermission/handlers/interactiveHandler.ts` | `executeAsyncClassifierCheck()` |
-| 分类器 stub | `src/utils/permissions/bashClassifier.ts` | `classifyBashCommand()` 签名 |
-| Auto mode | `src/utils/permissions/yoloClassifier.ts` | 2-stage XML classifier |
+
+| 功能             | 文件                                                        | 关键函数/行                                        |
+| -------------- | --------------------------------------------------------- | --------------------------------------------- |
+| 流式触发           | `src/query.ts`                                            | L830: `streamingToolExecutor.addTool()`       |
+| Speculative 启动 | `src/services/tools/toolExecution.ts`                     | L747-765: `startSpeculativeClassifierCheck()` |
+| 并发执行器          | `src/services/tools/StreamingToolExecutor.ts`             | `executeTool()`, `runToolUse()`               |
+| 权限主入口          | `src/hooks/useCanUseTool.tsx`                             | `CanUseToolFn`, L61-352                       |
+| Grace Period   | `src/hooks/useCanUseTool.tsx`                             | L242-304: 2秒等待逻辑                              |
+| Bash 权限决策      | `src/tools/BashTool/bashPermissions.ts`                   | `bashToolHasPermission()`                     |
+| 三分类器并行         | `src/tools/BashTool/bashPermissions.ts`                   | L1878-1896: deny/ask/allow 调用                 |
+| Speculative 存储 | `src/tools/BashTool/bashPermissions.ts`                   | `speculativeClassifierChecks` Map             |
+| 通用权限决策         | `src/utils/permissions/permissions.ts`                    | `hasPermissionsToUseToolInner()`              |
+| 交互式处理          | `src/hooks/toolPermission/handlers/interactiveHandler.ts` | `handleInteractivePermission()`               |
+| 异步分类检查         | `src/hooks/toolPermission/handlers/interactiveHandler.ts` | `executeAsyncClassifierCheck()`               |
+| 分类器 stub       | `src/utils/permissions/bashClassifier.ts`                 | `classifyBashCommand()` 签名                    |
+| Auto mode      | `src/utils/permissions/yoloClassifier.ts`                 | 2-stage XML classifier                        |
+
 
 ---
 
 ## 七、术语表
 
-| 术语 | 含义 |
-|------|------|
-| **Speculative Check** | 在正式需要结果前，提前在后台启动的分类器调用 |
-| **Grace Period** | 弹窗显示前的等待窗口（2秒），给 speculative 结果机会 |
-| **PendingClassifierCheck** | 附在 ask 决策上的元数据，描述如何后台运行 allow 分类器 |
-| **Prompt Rule** | 自然语言描述的安全规则，如 "git log and status commands" |
-| **sideQuery** | 轻量级 Anthropic API 调用，通常使用 Haiku 模型做分类 |
-| **Behavior** | 权限决策结果类型：`allow` / `deny` / `ask` |
-| **YOLO / Auto Mode** | 自动批准模式，使用分类器自动判断而非弹窗 |
-| **Coordinator Worker** | 协调器工作线程，等待自动化检查完成后再决定是否弹窗 |
-| **Swarm Worker** | 集群工作线程，通过 mailbox 向 leader 转发权限请求 |
+
+| 术语                         | 含义                                          |
+| -------------------------- | ------------------------------------------- |
+| **Speculative Check**      | 在正式需要结果前，提前在后台启动的分类器调用                      |
+| **Grace Period**           | 弹窗显示前的等待窗口（2秒），给 speculative 结果机会           |
+| **PendingClassifierCheck** | 附在 ask 决策上的元数据，描述如何后台运行 allow 分类器           |
+| **Prompt Rule**            | 自然语言描述的安全规则，如 "git log and status commands" |
+| **sideQuery**              | 轻量级 Anthropic API 调用，通常使用 Haiku 模型做分类       |
+| **Behavior**               | 权限决策结果类型：`allow` / `deny` / `ask`           |
+| **YOLO / Auto Mode**       | 自动批准模式，使用分类器自动判断而非弹窗                        |
+| **Coordinator Worker**     | 协调器工作线程，等待自动化检查完成后再决定是否弹窗                   |
+| **Swarm Worker**           | 集群工作线程，通过 mailbox 向 leader 转发权限请求           |
 
 
 ## 八、全工具权限管理流程图
@@ -530,7 +535,7 @@ API Stream          StreamingToolExecutor      useCanUseTool           BashPermi
 ┌────────────────────────────┐    ┌──────────────┐   ┌──────────────────────────────────────┐
 │ 进入后处理层 (wrapper)      │    │ 直接 resolve  │   │ 进入后处理层 (wrapper)               │
 │                            │    │ deny         │   │                                      │
-│ • 连续拒绝计数重置          │    │ → 返回拒绝   │   │ • dontAsk 模式: ask → deny           │
+│ • 连续拒绝计数重置           │     │ → 返回拒绝   │    │ • dontAsk 模式: ask → deny           │
 │   (auto mode 中)            │    │   结果       │   │ • auto 模式:                         │
 │                            │    │              │   │   - acceptEdits fast-path             │
 │                            │    │              │   │   - Safe-tool allowlist 跳过分类器     │
@@ -540,83 +545,96 @@ API Stream          StreamingToolExecutor      useCanUseTool           BashPermi
 │                            │    │              │   │   PermissionRequest hooks →           │
 │                            │    │              │   │   无决策则 auto-deny                  │
 │                            │    │              │   │                                      │
-│                            │    │              │   │ 后处理仍 ask → useCanUseTool 交互处理: │
+│                            │    │              │   │ 后处理仍 ask → 按场景分派交互处理:    │
+│                            │    │              │   │（三种场景互斥，不是顺序执行）           │
 │                            │    │              │   │                                      │
-│                            │    │              │   │ ① handleCoordinatorPermission()      │
-│                            │    │              │   │    (coordinatorHandler.ts)            │
-│                            │    │              │   │    → 批准则 resolve allow             │
+│                            │    │              │   │ 【Coordinator Worker 场景】            │
+│                            │    │              │   │ awaitAutomatedChecksBeforeDialog=true │
+│                            │    │              │   │ → handleCoordinatorPermission()       │
+│                            │    │              │   │   (coordinatorHandler.ts)             │
+│                            │    │              │   │   顺序等 hooks → classifier →         │
+│                            │    │              │   │   批准则 resolve / 搞不定 fallthrough │
 │                            │    │              │   │                                      │
-│                            │    │              │   │ ② handleSwarmWorkerPermission()      │
-│                            │    │              │   │    (swarmWorkerHandler.ts)            │
-│                            │    │              │   │    → 批准则 resolve allow             │
+│                            │    │              │   │ 【Swarm Worker 场景】                  │
+│                            │    │              │   │ isSwarmWorker() = true                │
+│                            │    │              │   │ → handleSwarmWorkerPermission()       │
+│                            │    │              │   │   (swarmWorkerHandler.ts)             │
+│                            │    │              │   │   classifier → mailbox 请示 leader →  │
+│                            │    │              │   │   leader 批准/拒绝 → resolve          │
 │                            │    │              │   │                                      │
-│                            │    │              │   │ ③ 【2s 宽限期】                       │
-│                            │    │              │   │    peekSpeculativeClassifierCheck()   │
-│                            │    │              │   │    (bashPermissions.ts)               │
-│                            │    │              │   │    → 高置信 allow → resolve allow     │
-│                            │    │              │   │    → 超时/不匹配 → 继续弹窗            │
+│                            │    │              │   │ 【Main Agent 场景】                    │
+│                            │    │              │   │ !awaitAutomatedChecksBeforeDialog     │
+│                            │    │              │   │ → ★【2s 宽限期】— 仅 BashTool        │
+│                            │    │              │   │   peekSpeculativeClassifierCheck()    │
+│                            │    │              │   │   → 高置信 allow → resolve allow      │
+│                            │    │              │   │   → 超时/不匹配 →                     │
 │                            │    │              │   │                                      │
-│                            │    │              │   │ ④ handleInteractivePermission()      │
-│                            │    │              │   │    (interactiveHandler.ts)            │
-│                            │    │              │   │    → 弹窗队列 + PermissionDialog       │
-│                            │    │              │   │    → 后台 executeAsyncClassifierCheck │
-│                            │    │              │   │    → 用户选择 / 自动批准 → resolve      │
+│                            │    │              │   │ → handleInteractivePermission()       │
+│                            │    │              │   │   (interactiveHandler.ts)             │
+│                            │    │              │   │   弹窗队列 + PermissionDialog          │
+│                            │    │              │   │   后台 executeAsyncClassifierCheck     │
+│                            │    │              │   │   用户选择 / 自动批准 → resolve        │
 └────────────────────────────┘    └──────────────┘   └──────────────────────────────────────┘
-                                                                                         │
-                                                                           ┌─────────────┴─────────────┐
-                                                                           │                           │
-                                                                           ▼                           ▼
-                                                                    resolve allow                 resolve deny
-                                                                           │                           │
-                                                                           ▼                           ▼
-┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+                                                                          │
+                                                            ┌─────────────┴─────────────┐
+                                                            │                           │
+                                                            ▼                           ▼
+                                                     resolve allow                 resolve deny
+                                                            │                           │
+                                                            ▼                           ▼
+┌───────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │  权限 resolve 后，checkPermissionsAndCallTool() 继续:                                                               │
 │                                                                                                                   │
 │  if (permissionDecision.behavior === 'allow') {                                                                  │
-│      ├── 恢复模型原始输入 (processedInput/backfilledClone)                                                          │
-│      └── ★ 调用 tool.call() — 每个工具的执行逻辑完全不同                                        │
+│      ├── 恢复模型原始输入 (processedInput/backfilledClone)                                                     │
+│      └── ★ 调用 tool.call() — 每个工具的执行逻辑完全不同                                   │
 │          → 真正执行（bash / 文件读写 / 网络请求 / Agent 调用 等）                                                  │
 │          → 产出 progress 消息（实时回显）                                                                           │
 │          → 返回 ToolResult                                                                                       │
-│      ├── endToolExecutionSpan()                                                                                  │
+│      ├── endToolExecutionSpan()                                                                             │
 │      └── 产出 tool_result 消息                                                                                   │
 │  } else {                                                                                                        │
 │      → 产出拒绝/错误的 tool_result 消息                                                                            │
 │      → 执行 PermissionDenied hooks（如有）                                                                        │
 │  }                                                                                                               │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+└───────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 > **★ 图例**：流程图中标 ★ 的步骤为**工具可自定义/个性化**的钩子或属性，其余为通用框架逻辑。
 
 ### ★ 工具个性化过程清单
 
-| 个性化过程 | 所在接口/位置 | 影响范围 | 默认值 |
-|---|---|---|---|
-| **tool.inputSchema** | `Tool` 接口定义 | 所有工具 | 每个工具独立 Zod schema |
-| **tool.validateInput** | `Tool` 接口（可选） | 有自定义验证的工具 | `undefined`（跳过） |
-| **投机启动 allow 分类器** | `toolExecution.ts:747` | 仅 BashTool（按 `tool.name` 判断） | 其他工具不触发 |
-| **tool.checkPermissions** | `Tool` 接口 | 22 工具有自定义，62 工具走默认 | `behavior: 'allow'` |
-| **tool.requiresUserInteraction** | `Tool` 接口（可选） | AskUserQuestionTool 等 | `false` |
-| **tool.call** | `Tool` 接口 | 所有工具 | 每个工具完全独立实现 |
-| **tool.description** | `Tool` 接口 | 所有工具 | 每个工具独立生成弹窗描述 |
-| **PermissionDenied hooks** | `toolExecution.ts` 尾部 | 有注册的工具 | 无 |
+
+| 个性化过程                            | 所在接口/位置                 | 影响范围                              | 默认值                 |
+| -------------------------------- | ----------------------- | --------------------------------- | ------------------- |
+| **tool.inputSchema**             | `Tool` 接口定义             | 所有工具                              | 每个工具独立 Zod schema   |
+| **tool.validateInput**           | `Tool` 接口（可选）           | 有自定义验证的工具                         | `undefined`（跳过）     |
+| **投机启动 allow 分类器**               | `toolExecution.ts:747`  | 仅 BashTool（按 `tool.name` 判断）      | 其他工具不触发             |
+| **2s 宽限期（grace period）**         | `useCanUseTool.tsx:242` | 仅 BashTool（peek 投机结果，2s 内匹配则跳过弹窗） | 其他工具不触发             |
+| **tool.checkPermissions**        | `Tool` 接口               | 22 工具有自定义，62 工具走默认                | `behavior: 'allow'` |
+| **tool.requiresUserInteraction** | `Tool` 接口（可选）           | AskUserQuestionTool 等             | `false`             |
+| **tool.call**                    | `Tool` 接口               | 所有工具                              | 每个工具完全独立实现          |
+| **tool.description**             | `Tool` 接口               | 所有工具                              | 每个工具独立生成弹窗描述        |
+| **PermissionDenied hooks**       | `toolExecution.ts` 尾部   | 有注册的工具                            | 无                   |
+
 
 ### 关键节点说明
 
-| 阶段 | 文件 | 作用 |
-|---|---|---|
-| **投机启动** | `toolExecution.ts:747-765` | BashTool 专属：在 pre-tool hooks 之前提前后台启动 allow 分类器 |
-| **通用决策引擎** | `permissions.ts:1158-1319` | `hasPermissionsToUseToolInner()` — 跨工具的 Phase 1/2/3 决策层次 |
-| **Bash 权限** | `bashPermissions.ts` | `bashToolHasPermission()` — AST 解析、静态规则、prompt 分类器、路径安全、子命令拆分 |
-| **PowerShell 权限** | `powershellPermissions.ts` | `powershellToolHasPermission()` — 类似 Bash 但 PowerShell 语义 |
-| **文件写入权限** | `filesystem.ts:1205` | `checkWritePermissionForTool()` — deny规则 → 内部路径 → 安全检查 → acceptEdits → allow规则 |
-| **文件读取权限** | `filesystem.ts:1030` | `checkReadPermissionForTool()` — deny规则 → ask规则 → 写入权限覆盖 → 工作目录 → 内部路径 → allow规则 |
-| **WebFetch 权限** | `WebFetchTool` | host allowlist 匹配即 allow，否则 ask |
-| **Coordinator 审批** | `coordinatorHandler.ts` | 协调器工作线程：等待自动化检查完成后再决定是否弹窗 |
-| **Swarm 转发** | `swarmWorkerHandler.ts` | 集群工作线程：转发权限请求到 leader 或通过 classifier |
-| **交互弹窗** | `interactiveHandler.ts` | REPL 中显示 PermissionDialog，支持后台分类器自动批准 |
-| **2s 宽限期** | `useCanUseTool.tsx:242-304` | 弹窗前等待投机分类器结果，若匹配则跳过弹窗直接 allow |
+
+| 阶段                 | 文件                          | 作用                                                                               |
+| ------------------ | --------------------------- | -------------------------------------------------------------------------------- |
+| **投机启动**           | `toolExecution.ts:747-765`  | BashTool 专属：在 pre-tool hooks 之前提前后台启动 allow 分类器                                  |
+| **通用决策引擎**         | `permissions.ts:1158-1319`  | `hasPermissionsToUseToolInner()` — 跨工具的 Phase 1/2/3 决策层次                         |
+| **Bash 权限**        | `bashPermissions.ts`        | `bashToolHasPermission()` — AST 解析、静态规则、prompt 分类器、路径安全、子命令拆分                    |
+| **PowerShell 权限**  | `powershellPermissions.ts`  | `powershellToolHasPermission()` — 类似 Bash 但 PowerShell 语义                        |
+| **文件写入权限**         | `filesystem.ts:1205`        | `checkWritePermissionForTool()` — deny规则 → 内部路径 → 安全检查 → acceptEdits → allow规则   |
+| **文件读取权限**         | `filesystem.ts:1030`        | `checkReadPermissionForTool()` — deny规则 → ask规则 → 写入权限覆盖 → 工作目录 → 内部路径 → allow规则 |
+| **WebFetch 权限**    | `WebFetchTool`              | host allowlist 匹配即 allow，否则 ask                                                  |
+| **Coordinator 审批** | `coordinatorHandler.ts`     | 协调器工作线程：等待自动化检查完成后再决定是否弹窗                                                        |
+| **Swarm 转发**       | `swarmWorkerHandler.ts`     | 集群工作线程：转发权限请求到 leader 或通过 classifier                                             |
+| **交互弹窗**           | `interactiveHandler.ts`     | REPL 中显示 PermissionDialog，支持后台分类器自动批准                                            |
+| **2s 宽限期**         | `useCanUseTool.tsx:242-304` | 弹窗前等待投机分类器结果，若匹配则跳过弹窗直接 allow                                                    |
+
 
 ### 权限决策优先级（从高到低，全工具通用）
 
@@ -632,3 +650,4 @@ API Stream          StreamingToolExecutor      useCanUseTool           BashPermi
 10. **静态规则**（prefix/exact match） → 允许/弹窗（Bash 子命令级别）
 11. **Allow 分类器** → 弹窗后后台尝试自动批准（Bash/PowerShell 专属）
 12. **默认 passthrough** → 转为 ask（如 WebSearch、MCP、AgentTool auto-mode）
+
