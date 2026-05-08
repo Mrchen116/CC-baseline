@@ -275,7 +275,6 @@ A → B → C → D
 
 | 选择 | 原因 |
 |------|------|
-| **JSONL 而非 JSON** | 支持 append-only：每条消息追加一行，无需读取、解析、修改、重写整个文件。 |
 | **每条消息自带 session 级字段** | 由于 append-only 无法共享文件头，只能用磁盘空间换写入性能。1000 轮会话会把 `sessionId` / `cwd` / `version` 重复写 1000 次。 |
 | **compaction 不删旧数据** | 文件只增不减，通过 `compact_boundary` 在**读取时**跳过旧历史。保证崩溃安全：即使压缩过程中进程死掉，已写入的数据仍完整可用。 |
 | **元数据重复 re-append** | 在 compact 前后和退出时，把 `custom-title`、`tag`、`last-prompt` 等重新刷到文件尾部，确保它们落在 `readLiteMetadata` 扫描的 tail 窗口内，否则 resume 列表会看不到。 |

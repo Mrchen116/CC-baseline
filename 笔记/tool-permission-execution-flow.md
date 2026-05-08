@@ -531,57 +531,71 @@ API Stream          StreamingToolExecutor      useCanUseTool           BashPermi
                            ▼               ▼               ▼
                       behavior=allow   behavior=deny   behavior=ask
                            │               │               │
-                           ▼               ▼               ▼
-┌────────────────────────────┐    ┌──────────────┐   ┌──────────────────────────────────────┐
-│ 进入后处理层 (wrapper)      │    │ 直接 resolve  │   │ 进入后处理层 (wrapper)               │
-│                            │    │ deny         │   │                                      │
-│ • 连续拒绝计数重置           │     │ → 返回拒绝   │    │ • dontAsk 模式: ask → deny           │
-│   (auto mode 中)            │    │   结果       │   │ • auto 模式:                         │
-│                            │    │              │   │   - acceptEdits fast-path             │
-│                            │    │              │   │   - Safe-tool allowlist 跳过分类器     │
-│                            │    │              │   │   - YOLO classifier 判断              │
-│                            │    │              │   │   - Denial tracking（连续拒绝上限）    │
-│                            │    │              │   │ • headless/async agents:              │
-│                            │    │              │   │   PermissionRequest hooks →           │
-│                            │    │              │   │   无决策则 auto-deny                  │
-│                            │    │              │   │                                      │
-│                            │    │              │   │ 后处理仍 ask → 按场景分派交互处理:    │
-│                            │    │              │   │（三种场景互斥，不是顺序执行）           │
-│                            │    │              │   │                                      │
-│                            │    │              │   │ 【Coordinator Worker 场景】            │
-│                            │    │              │   │ awaitAutomatedChecksBeforeDialog=true │
-│                            │    │              │   │ → handleCoordinatorPermission()       │
-│                            │    │              │   │   (coordinatorHandler.ts)             │
-│                            │    │              │   │   顺序等 hooks → classifier →         │
-│                            │    │              │   │   批准则 resolve / 搞不定 fallthrough │
-│                            │    │              │   │                                      │
-│                            │    │              │   │ 【Swarm Worker 场景】                  │
-│                            │    │              │   │ isSwarmWorker() = true                │
-│                            │    │              │   │ → handleSwarmWorkerPermission()       │
-│                            │    │              │   │   (swarmWorkerHandler.ts)             │
-│                            │    │              │   │   classifier → mailbox 请示 leader →  │
-│                            │    │              │   │   leader 批准/拒绝 → resolve          │
-│                            │    │              │   │                                      │
-│                            │    │              │   │ 【Main Agent 场景】                    │
-│                            │    │              │   │ !awaitAutomatedChecksBeforeDialog     │
-│                            │    │              │   │ → ★【2s 宽限期】— 仅 BashTool        │
-│                            │    │              │   │   peekSpeculativeClassifierCheck()    │
-│                            │    │              │   │   → 高置信 allow → resolve allow      │
-│                            │    │              │   │   → 超时/不匹配 →                     │
-│                            │    │              │   │                                      │
-│                            │    │              │   │ → handleInteractivePermission()       │
-│                            │    │              │   │   (interactiveHandler.ts)             │
-│                            │    │              │   │   弹窗队列 + PermissionDialog          │
-│                            │    │              │   │   后台 executeAsyncClassifierCheck     │
-│                            │    │              │   │   用户选择 / 自动批准 → resolve        │
-└────────────────────────────┘    └──────────────┘   └──────────────────────────────────────┘
-                                                                          │
-                                                            ┌─────────────┴─────────────┐
-                                                            │                           │
-                                                            ▼                           ▼
-                                                     resolve allow                 resolve deny
-                                                            │                           │
-                                                            ▼                           ▼
+                           ▼               ▼               │
+                    ┌─────────────┐  ┌─────────────┐      │
+                    │ 后处理层     │  │ 直接         │      │
+                    │ (wrapper)   │  │ resolve deny │      │
+                    │             │  │ → 返回拒绝   │      │
+                    │ • 连续拒绝计 │  │   结果       │      │
+                    │   数重置     │  │              │      │
+                    │   (auto模式) │  │              │      │
+                    │             │  │              │      │
+                    │ → resolve   │  │              │      │
+                    │   allow     │  │              │      │
+                    └──────┬──────┘  └──────┬──────┘      │
+                           │                │             │
+                           ▼                ▼             │
+                     resolve allow    resolve deny        │
+                                                          │
+                                                          │
+                                                          ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│ 【第一层】mode-based 后处理  (hasPermissionsToUseTool, permissions.ts:473-955)                      │
+│                                                                                             │
+│ • dontAsk 模式 → 直接 deny                                                                      │
+│   (不可绕过，即使 bypassPermissions 也生效后的 ask 仍会被拦截)                                               │
+│                                                                                             │
+│ • auto 模式 → 多层判断:                                                                           │
+│   1) safetyCheck 非 classifier-approvable + headless → deny                                  │
+│   2) requiresUserInteraction() → ask (保持弹窗)                                                 │
+│   3) PowerShell + !POWERSHELL_AUTO_MODE → ask/deny                                          │
+│   4) acceptEdits fast-path → 再跑 checkPermissions，allow 则放行                                  │
+│   5) safe-tool allowlist → allow (跳过 classifier)                                            │
+│   6) YOLO classifier (classifyYoloAction) → allow/deny/ask                                  │
+│   7) denial limit 超限 → ask (或 headless abort)                                               │
+│                                                                                             │
+│ • headless/async agents (shouldAvoidPermissionPrompts):                                     │
+│   PermissionRequest hooks → 有决策则返回 / 无决策则 auto-deny                                         │
+│                                                                                             │
+│ 第一层处理完后:                                                                                    │
+│   allow → 直接 resolve allow    deny → 直接 resolve deny                                        │
+│   仍 ask → 进入第二层 ↓                                                                           │
+│                                                                                             │
+│ 【第二层】场景分派  (useCanUseTool case 'ask', useCanUseTool.tsx:189-327)                            │
+│ （三种场景互斥，顺序判断但只命中一个）                                                                         │
+│                                                                                             │
+│ 【Coordinator Worker 场景】                                                                     │
+│ awaitAutomatedChecksBeforeDialog = true                                                     │
+│ → handleCoordinatorPermission()                                                             │
+│   顺序等 hooks → ★classifier allow only (Bash) → 批准 resolve / 搞不定 fallthrough                  │
+│                                                                                             │
+│ 【Swarm Worker 场景】                                                                           │
+│ isSwarmWorker() = true                                                                      │
+│ → handleSwarmWorkerPermission()                                                             │
+│   ★classifier allow only (Bash) → mailbox 请示 leader → leader 批准/拒绝 → resolve                  │
+│                                                                                             │
+│ 【Main Agent 场景】                                                                             │
+│ → ★【2s 宽限期】— 仅 BashTool                                                                     │
+│   peekSpeculativeClassifierCheck() → 高置信 allow → resolve allow                              │
+│   超时/不匹配 → handleInteractivePermission()                                                    │
+│   弹窗队列 + PermissionDialog + 后台 executeAsyncClassifierCheck                                  │
+│   用户选择 / 自动批准 → resolve                                                                     │
+└───────────────────────────────────────────────────────────────┬─────────────────────────────┘
+                                                               │
+                              ┌───────────────┴─────────────────────────────┐
+                              │                                             │
+                              ▼                                             ▼
+                       resolve allow                                   resolve deny
 ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │  权限 resolve 后，checkPermissionsAndCallTool() 继续:                                                               │
 │                                                                                                                   │
@@ -650,4 +664,122 @@ API Stream          StreamingToolExecutor      useCanUseTool           BashPermi
 10. **静态规则**（prefix/exact match） → 允许/弹窗（Bash 子命令级别）
 11. **Allow 分类器** → 弹窗后后台尝试自动批准（Bash/PowerShell 专属）
 12. **默认 passthrough** → 转为 ask（如 WebSearch、MCP、AgentTool auto-mode）
+
+## 九、BashTool 权限决策详解
+
+> `bashToolHasPermission()` 内部完整流程（`bashPermissions.ts:1663-2554`）。
+> 这是全工具流程图中 Phase 1c → BashTool 分支的展开。
+
+```
+输入: { command, sandbox?, ... }
+  │
+  ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│ 0. AST 解析 (parseCommandRaw → parseForSecurityFromAst)                                      │
+│                                                                                              │
+│  tree-sitter 解析命令字符串:                                                                  │
+│  ├── too-complex (命令替换/展开/控制流/解析差异)                                              │
+│  │   → checkEarlyExitDeny() → deny 或 ask + pendingClassifierCheck                           │
+│  ├── simple (干净解析)                                                                       │
+│  │   → checkSemantics() → zsh builtins/eval 等语义危险                                       │
+│  │       → 语义不安全: checkSemanticsDeny() → deny 或 ask                                    │
+│  └── parse-unavailable (tree-sitter 未加载)                                                  │
+│      → tryParseShellCommand() → 解析失败 → ask                                               │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│ 1. Sandbox auto-allow                                                                        │
+│                                                                                              │
+│  sandbox 启用 && auto-allow 开启 && shouldUseSandbox(input)                                   │
+│  → checkSandboxAutoAllow() → allow 或 passthrough → 继续                                      │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│ 2. Exact match                                                                               │
+│                                                                                              │
+│  bashToolCheckExactMatchPermission()                                                         │
+│  ├── exact deny → 返回 deny                                                                  │
+│  └── exact allow → 暂存结果，继续 (后续可能覆盖)                                              │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│ 3. Prompt-based classifier (deny + ask)                                                      │
+│                                                                                              │
+│  isClassifierPermissionsEnabled() && !auto mode                                              │
+│  ├── deny classifier: classifyBashCommand(..., 'deny')                                   │
+│  │   → 高置信匹配 → 返回 deny                                                                │
+│  └── ask classifier: classifyBashCommand(..., 'ask')                                    │
+│      → 高置信匹配 → 返回 ask + suggestions + pendingClassifierCheck                          │
+│                                                                                              │
+│  (注意: 此处没有 allow classifier，allow 在第二层处理)                                        │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│ 4. Command operator check                                                                    │
+│                                                                                              │
+│  checkCommandOperatorPermissions() — 处理管道、重定向等复合结构                                │
+│  ├── 每个管道段递归调用 bashToolHasPermission()                                               │
+│  ├── 段结果 deny → deny                                                                      │
+│  ├── 段结果 ask → ask + pendingClassifierCheck                                               │
+│  └── 段结果 allow → 仍需检查原始命令的路径约束 (防止重定向被绕过)                             │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│ 5. Legacy security check (AST 不可用时)                                                      │
+│                                                                                              │
+│  astSubcommands === null → bashCommandIsSafeAsync()                                          │
+│  → 发现 misparsing 模式 (命令注入风险)                                                        │
+│    → check exact match allow → allow 或 ask + pendingClassifierCheck                         │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│ 6. Subcommand split & per-subcommand check                                                   │
+│                                                                                              │
+│  splitCommand() / astSubcommands — 拆分为子命令                                               │
+│  ├── 子命令数 > MAX → ask                                                                    │
+│  ├── 多个 cd → ask                                                                           │
+│  ├── cd + git → ask (防止 bare repo 攻击)                                                    │
+│  └── bashToolCheckPermission() 每个子命令:                                                    │
+│      ├── static prefix/exact match allow/deny                                                │
+│      ├── checkPathConstraints() — 路径边界、输出重定向                                         │
+│      └── readOnlyValidation — 只读命令验证                                                   │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+                           ┌───────────────┼───────────────┐
+                           │               │               │
+                           ▼               ▼               ▼
+                      有 deny         有 ask          全部 allow
+                           │               │               │
+                           ▼               ▼               ▼
+                    ┌──────────┐    ┌──────────┐    ┌──────────┐
+                    │ 返回 deny │    │ 返回 ask │    │ 返回 allow│
+                    │          │    │ + sugg.  │    │          │
+                    │          │    │ + pending│    │          │
+                    └──────────┘    └──────────┘    └──────────┘
+```
+
+### 关键说明
+
+| 阶段 | 函数 | 作用 | 结果 |
+|------|------|------|------|
+| **0** | `parseCommandRaw` / `parseForSecurityFromAst` | AST 解析 + 语义检查 | too-complex / simple / unavailable |
+| **1** | `checkSandboxAutoAllow` | Sandbox 自动放行 | allow / passthrough |
+| **2** | `bashToolCheckExactMatchPermission` | 精确匹配规则 | deny / allow / passthrough |
+| **3** | `classifyBashCommand(..., deny/ask)` | Prompt 分类器 | deny / ask / null |
+| **4** | `checkCommandOperatorPermissions` | 管道/重定向处理 | deny / ask / allow |
+| **5** | `bashCommandIsSafeAsync` | Legacy 安全检查 | ask / passthrough |
+| **6** | `bashToolCheckPermission` | 子命令级权限 | deny / ask / allow |
+
+### 关于 allow classifier 的位置
+
+第一层 (`bashToolHasPermission`) **没有 allow classifier**。allow classifier 只在**第二层**（coordinator / swarm / main agent）中运行，目的是在弹窗显示时/之前尝试**自动批准**。
+
+第一层返回 `ask` 时，会附带 `pendingClassifierCheck`（包含 allow classifier 所需的参数），供第二层使用。
 
