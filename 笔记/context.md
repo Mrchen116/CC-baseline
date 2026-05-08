@@ -5,6 +5,7 @@
 ### applyToolResultBudget
 
 - 目标：在真正进入 compact 之前，先给 `tool_result` 做一层“消息级瘦身”，避免单轮工具返回把上下文直接撑爆；调用点见 [query.ts#L380](../src/query.ts)、实现见 [toolResultStorage.ts](../src/utils/toolResultStorage.ts)。
+- `applyToolResultBudget` 不是首轮工具结果压缩。单个工具结果在产出时，已经按 `maxResultSizeChars` 在 `addToolResult() -> processToolResultBlock()/processPreMappedToolResultBlock() -> maybePersistLargeToolResult()` 中做过一次持久化替换，替换后会变成 `<persisted-output>...`。这里处理的是多个 `tool_result` 合并后的总量预算，并且会跳过已经替换过的结果。
 - 预算限制：默认 `MAX_TOOL_RESULTS_PER_MESSAGE_CHARS = 200_000`，可通过 GrowthBook flag `tengu_hawthorn_window` 覆盖，见 [toolLimits.ts](../src/constants/toolLimits.ts)。
 
 #### 分组与评估逻辑
@@ -68,15 +69,88 @@ Preview (first ...):
 #### 最可能的算法
 
 1. **按上下文增长节奏提示，但不是纯 token 硬阈值自动执行**
-  现有线索更像“上下文变重时，系统按一段固定节奏 nudges 模型考虑 snip”，而不是像 autocompact 那样“超过 X token 立即压缩”。`context_efficiency` attachment 的注释明确写了 pacing 由 `shouldNudgeForSnips` 控制，且存在 `10k interval`，这个 interval 会在 prior nudges、snip markers、snip boundaries、compact boundaries 时重置，见 [attachments.ts#L3960](../src/utils/attachments.ts)。
-2. **先登记 marker，再在 query 前统一执行**
-  代码里区分了 `snip marker` 和 `snip boundary`：marker 是 internal registration marker，不直接给用户看；boundary 才表示“真正执行过一次 snip”，见 [Message.tsx#L203](../src/components/Message.tsx)。因此更像两阶段：先由 `SnipTool` 或 `/force-snip` 之类入口登记“哪段历史可裁剪”，再由 [query.ts#L404](../src/query.ts) 的 `snipCompactIfNeeded()` 在每轮 query 前统一落地。
+  现有线索更像“上下文变重时，系统按一段固定节奏提示（nudge）模型考虑 snip”，而不是像 autocompact 那样“超过 X token 立即压缩”。`context_efficiency` 附件（attachment）的注释明确写了，节奏控制（pacing）由 `shouldNudgeForSnips` 控制，且存在 `10k 间隔（10k interval）`；这个间隔会在之前的提示（prior nudges）、snip 标记（snip markers）、snip 边界（snip boundaries）、compact 边界（compact boundaries）时重置，见 [attachments.ts#L3960](../src/utils/attachments.ts)。
+2. **先登记标记（marker），再在 query 前统一执行**
+  代码里区分了 `snip 标记（snip marker）` 和 `snip 边界（snip boundary）`：标记（marker）是内部登记标记（internal registration marker），不直接给用户看；边界（boundary）才表示“真正执行过一次 snip”，见 [Message.tsx#L203](../src/components/Message.tsx)。因此更像两阶段：先由 `SnipTool` 或 `/force-snip` 之类入口登记“哪段历史可裁剪”，再由 [query.ts#L404](../src/query.ts) 的 `snipCompactIfNeeded()` 在每轮 query 前统一落地。
 3. **真正执行时是“删中段消息”，不是摘要**
-  恢复逻辑的注释已经把设计说透了：`compact_boundary` 是截掉前缀，`snip` 是删除历史中间 ranges；执行时会把被删除消息记成 `removedUuids`，恢复时重放删除，并修复 surviving message 的 `parentUuid` 链，避免 resume 时把整段未 snip 历史重新串回来，见 [sessionStorage.ts#L1963](../src/utils/sessionStorage.ts)。
-4. **模型视图删掉，REPL scrollback 保留**
-  执行后并不一定把所有原始消息都从 UI 层彻底抹掉。更像是 REPL 保留全量 transcript 方便滚动查看，而 API 视图通过 `projectSnippedView()` 投影掉被 snip 的消息；resume / replay 时又可以根据 boundary 重放这次删除，见 [messages.ts#L4685](../src/utils/messages.ts)、[QueryEngine.ts#L1266](../src/QueryEngine.ts)。
+  恢复逻辑的注释已经把设计说透了：`compact_boundary` 是截掉前缀，`snip` 是删除历史中间区段（ranges）；执行时会把被删除消息记成 `removedUuids`，恢复时重放（replay）删除，并修复幸存消息（surviving message）的 `parentUuid` 链，避免恢复会话（resume）时把整段未 snip 历史重新串回来，见 [sessionStorage.ts#L1963](../src/utils/sessionStorage.ts)。
+4. **模型视图删掉，REPL 滚动历史（scrollback）保留**
+  执行后并不一定把所有原始消息都从界面层（UI）彻底抹掉。更像是 REPL 保留全量对话记录（transcript）方便滚动查看，而 API 视图通过 `projectSnippedView()` 投影（project）掉被 snip 的消息；恢复会话（resume）/ 重放（replay）时又可以根据边界（boundary）重放这次删除，见 [messages.ts#L4685](../src/utils/messages.ts)、[QueryEngine.ts#L1266](../src/QueryEngine.ts)。
 5. **返回粗粒度 token 回收量，供 autocompact 阈值修正**
   `snipCompactIfNeeded()` 的返回值里有 `tokensFreed`，并且 query loop 会把它继续传给 autocompact。说明设计上 snip 不是 UI 隐藏，而是真要从模型输入里删掉一段历史，并估算释放了多少 token，避免 autocompact 用 stale usage 误判，见 [query.ts#L397](../src/query.ts)、[autoCompact.ts#L165](../src/services/compact/autoCompact.ts)。
+
+#### 最可能的 SnipTool 输入结构
+
+- 现有工具大多用 `z.strictObject({...})` 并给每个字段写 `.describe(...)`，见 [GrepTool.ts](../src/tools/GrepTool/GrepTool.ts)、[TaskCreateTool.ts](../src/tools/TaskCreateTool/TaskCreateTool.ts)。按这个风格，SnipTool 最可能会长成下面这样。
+
+```ts
+const inputSchema = lazySchema(() =>
+  z.strictObject({
+    spans: z
+      .array(
+        z.strictObject({
+          start_id: z
+            .string()
+            .describe(
+              'Short [id:xxxxxx] tag of the first user message in the span to snip.',
+            ),
+          end_id: z
+            .string()
+            .describe(
+              'Short [id:xxxxxx] tag of the last user message in the span to snip.',
+            ),
+          reason: z
+            .string()
+            .optional()
+            .describe(
+              'Why this span is safe to remove from active context.',
+            ),
+        }),
+      )
+      .min(1)
+      .describe('One or more historical spans to remove from active context.'),
+  }),
+)
+```
+
+- 字段含义最可能是：
+  - `spans`：要 snip 的一个或多个历史区段；即使工具一次只删一段，整体系统最终也肯定支持多次 snip，因此把它写成列表更接近现有架构。
+  - `start_id`：区段起点，对应某条 `user message` 末尾的短 ID。
+  - `end_id`：区段终点，对应另一条 `user message` 末尾的短 ID。
+  - `reason`：可选的人类可读解释，主要用于调试、边界消息文案或后续审计，不是执行本身的锚点。
+
+- 这套 schema 的关键依据是：当 `HISTORY_SNIP` 真正运行时，系统会给发往模型的 `user message` 末尾追加 `[id:xxxxxx]` 标签，注释直接写了这是 “for snip tool referencing”，见 [messages.ts#L198](../src/utils/messages.ts)、[messages.ts#L2372](../src/utils/messages.ts)。
+- 这些短 ID 由消息 UUID 稳定映射而来，见 [deriveShortMessageId()](../src/utils/messages.ts#L201)；而 snip 的恢复逻辑最终依赖的是精确的 `removedUuids`，因此执行层需要能把工具输入稳定地映射回具体消息，见 [sessionStorage.ts#L1963](../src/utils/sessionStorage.ts)。
+- 这些 `start_id / end_id` 最可能对应的是 `user message` 的短 ID，而不是 assistant/tool message 的 ID。因为当前 `[id:xxxxxx]` 标签只会注入到 `user message` 文本末尾，见 [messages.ts#L2378](../src/utils/messages.ts)。因此更像是“从某个用户回合（user turn）开始，到另一个用户回合结束”，中间夹着的 assistant / tool_use / tool_result 一起算进要 snip 的区间。
+
+- 一个很像真实运行时的例子是：模型看到如下消息
+
+```txt
+user:
+先帮我排查为什么 session resume 后上下文突然暴涨
+[id:a1b2c3]
+
+assistant:
+我先检查 session restore 和 compact 边界逻辑
+
+user:
+重点看 snip 有没有把删掉的消息又串回来
+[id:d4e5f6]
+```
+
+  那么它最可能产出的工具输入会是：
+
+```json
+{
+  spans: [
+    {
+      "start_id": "a1b2c3",
+      "end_id": "d4e5f6",
+      "reason": "这一段排查已经得出结论，后续不需要保留完整原始过程"
+    }
+  ]
+}
+```
 
 ### microcompactMessages
 
@@ -91,22 +165,22 @@ Preview (first ...):
 - 定位：`context collapse` 想做的是比 `autocompact` 更细粒度的分段归档；如果它先把上下文压到阈值下，后面的 `autocompact` 就可以不触发，调用点见 [query.ts#L440](../src/query.ts)。
 - 形态：设计上不是把整段历史压成一个总摘要，而是按多个 `span` 归档；状态里有 `collapsedSpans / collapsedMessages / stagedSpans`，界面文案也会显示“多少个 span 被 summarized”，见 [index.ts](../src/services/contextCollapse/index.ts)、[context-noninteractive.ts](../src/commands/context/context-noninteractive.ts)。
 - 存储方式：它不是往 REPL 消息数组里 `yield` 新摘要，而是把摘要放进 collapse store，读取时通过 `projectView()` 投影出 collapsed 视图，所以效果可以跨 turn 持续，见 [query.ts](../src/query.ts)、[operations.ts](../src/services/contextCollapse/operations.ts)、[persist.ts](../src/services/contextCollapse/persist.ts)。
-- 当前仓库状态：核心实现目前是 stub，`applyCollapsesIfNeeded()` 和 `projectView()` 都是 no-op；因此只能确认它要做“分段归档”，看不到真实的 span 划分规则，也不能确认是按 turn、token 还是主题切分，见 [index.ts](../src/services/contextCollapse/index.ts)、[operations.ts](../src/services/contextCollapse/operations.ts)。
+- 当前仓库状态：核心实现目前是 stub，`applyCollapsesIfNeeded()` 和 `projectView()` 都是 no-op；因此只能确认它要做“分段归档”，**看不到真实的 span 划分规则，也不能确认是按 turn、token 还是主题切分**，见 [index.ts](../src/services/contextCollapse/index.ts)、[operations.ts](../src/services/contextCollapse/operations.ts)。
 
 #### 最可能的算法
 
-1. **接近上下文上限时，先用 collapse 接管 headroom 管理**
-  它的触发条件看起来比 autocompact 更前置。`autoCompact.ts` 里的注释明确提到，collapse 模式下由 `90% commit-start / 95% blocking-spawn` 这套流程来管理 headroom，因此一旦 `isContextCollapseEnabled()` 为真，就会 suppress proactive autocompact，避免 autocompact 抢先把上下文粗暴压成单摘要，见 [autoCompact.ts#L197](../src/services/compact/autoCompact.ts)。
-2. **先把旧历史切成 span 放入 staged queue**
-  类型定义里不只有 “collapsed”，还有 `stagedSpans`，持久化快照还记录了 `staged: [{ startUuid, endUuid, summary, risk, stagedAt }]`、`armed`、`lastSpawnTokens`。这说明算法更像“先识别一段可折叠历史，排进 staged queue，等待后台处理”，而不是当前轮同步把整段历史马上改写，见 [logs.ts#L247](../src/types/logs.ts)。
-3. **后台 ctx-agent 为每个 staged span 产出摘要，再提交为 committed collapse**
-  `ContextCollapseCommitEntry` 记录的是 `summaryUuid / summaryContent / summary / firstArchivedUuid / lastArchivedUuid`，并且注释明确说 archived messages 本身不需要持久化，因为它们已经在 transcript 里；commit 只持久化“摘要占位符 + splice instruction”。因此最可能的执行器是后台 spawn 一个 ctx-agent，总结 span，成功后把这个 span 从 staged 变成 committed，见 [logs.ts#L247](../src/types/logs.ts)。
-4. **读取时不是“插一条总结消息”，而是投影成 collapsed placeholder**
-  `projectView()` 的职责更像是：扫描当前消息数组，找到 `firstArchivedUuid..lastArchivedUuid` 对应的原始 span，把它替换成一个 `<collapsed id="...">summary</collapsed>` 之类的占位符视图。这个 placeholder 不直接显示在对话里，只在 context 统计里体现成“多少个 span summarized”，见 [ContextVisualization.tsx#L18](../src/components/ContextVisualization.tsx)、[context.tsx#L16](../src/commands/context/context.tsx)。
-5. **413 / prompt-too-long 时走 drain：先排空 staged spans，再 retry**
-  在错误恢复链里，`prompt-too-long` 会先被 withheld，不立刻暴露；第一优先不是 reactive compact，而是 `recoverFromOverflow()`。注释明确说它会“先把所有 staged 的 context-collapse 彻底排空”，也就是把还没正式提交的 spans 尽快 collapse 掉，再用新的 collapsed view 重试；只有这条路失败，才退化到 reactive compact，见 [query.ts#L1058](../src/query.ts)。
+1. **接近上下文上限时，先用 collapse 接管余量管理（headroom management）**
+  它的触发条件看起来比 autocompact 更前置。`autoCompact.ts` 里的注释明确提到，collapse 模式下由 `90% 开始提交（commit-start） / 95% 阻塞式启动后台处理（blocking-spawn）` 这套流程来管理上下文余量（headroom），因此一旦 `isContextCollapseEnabled()` 为真，就会抑制主动式自动压缩（suppress proactive autocompact），避免 autocompact 抢先把上下文粗暴压成单摘要，见 [autoCompact.ts#L197](../src/services/compact/autoCompact.ts)。
+2. **先把旧历史切成消息区段（span），放入暂存队列（staged queue）**
+  类型定义里不只有 “已折叠（collapsed）”，还有 `stagedSpans`，持久化快照还记录了 `staged: [{ startUuid, endUuid, summary, risk, stagedAt }]`、`armed`、`lastSpawnTokens`。这说明算法更像“先识别一段可折叠历史，排进暂存队列（staged queue），等待后台处理”，而不是当前轮同步把整段历史马上改写，见 [logs.ts#L247](../src/types/logs.ts)。
+3. **后台上下文代理（ctx-agent）为每个暂存区段（staged span）产出摘要，再提交为已提交折叠（committed collapse）**
+  `ContextCollapseCommitEntry` 记录的是 `summaryUuid / summaryContent / summary / firstArchivedUuid / lastArchivedUuid`，并且注释明确说已归档消息（archived messages）本身不需要持久化，因为它们已经在对话记录（transcript）里；提交记录（commit）只持久化“摘要占位符 + 拼接指令（splice instruction）”。因此最可能的执行器是后台启动（spawn）一个上下文代理（ctx-agent），总结消息区段（span），成功后把这个区段从暂存（staged）变成已提交（committed），见 [logs.ts#L247](../src/types/logs.ts)。
+4. **读取时不是“插一条总结消息”，而是投影成已折叠占位符（collapsed placeholder）**
+  `projectView()` 的职责更像是：扫描当前消息数组，找到 `firstArchivedUuid..lastArchivedUuid` 对应的原始消息区段（span），把它替换成一个 `<collapsed id="...">summary</collapsed>` 之类的占位符视图。这个占位符（placeholder）不直接显示在对话里，只在上下文统计（context）里体现成“多少个消息区段（span）已被总结（summarized）”，见 [ContextVisualization.tsx#L18](../src/components/ContextVisualization.tsx)、[context.tsx#L16](../src/commands/context/context.tsx)。
+5. **413 / prompt-too-long 时走强制排空（drain）：先排空暂存区段（staged spans），再重试（retry）**
+  在错误恢复链里，`prompt-too-long` 会先被暂缓暴露（withheld），不立刻暴露；第一优先不是响应式压缩（reactive compact），而是 `recoverFromOverflow()`。注释明确说它会“先把所有 staged 的 context-collapse 彻底排空”，也就是把还没正式提交的消息区段（spans）尽快 collapse 掉，再用新的已折叠视图（collapsed view）重试；只有这条路失败，才退化到响应式压缩（reactive compact），见 [query.ts#L1058](../src/query.ts)。
 6. **设计目标是保留细粒度上下文，而不是退化成整段摘要**
-  整个算法存在的意义就是：在接近上下文上限时，优先把“已经完成、可归档”的旧 span 逐段折叠掉，让最近上下文继续保留原始消息粒度；只有 collapse 已无法继续释放空间，才需要 autocompact / reactive compact 这种更重、更粗的摘要路径，见 [query.ts#L429](../src/query.ts)、[autoCompact.ts#L197](../src/services/compact/autoCompact.ts)。
+  整个算法存在的意义就是：在接近上下文上限时，优先把“已经完成、可归档”的旧消息区段（span）逐段折叠掉，让最近上下文继续保留原始消息粒度；只有 collapse 已无法继续释放空间，才需要 autocompact / 响应式压缩（reactive compact）这种更重、更粗的摘要路径，见 [query.ts#L429](../src/query.ts)、[autoCompact.ts#L197](../src/services/compact/autoCompact.ts)。
 
 ### autocompact
 
