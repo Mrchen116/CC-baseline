@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Claude Code 系统提示词拆解：Anthropic 都会翻车，你还觉得写 prompt 简单？</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+    max-width: 840px;
+    margin: 40px auto;
+    padding: 0 24px 80px;
+    color: #1f2328;
+    line-height: 1.78;
+    font-size: 16px;
+    background: #fff;
+  }
+  h1 {
+    font-size: 26px;
+    line-height: 1.45;
+    border-bottom: 2px solid #1f2328;
+    padding-bottom: 14px;
+    margin-bottom: 28px;
+  }
+  h2 {
+    font-size: 21px;
+    margin-top: 44px;
+    border-left: 4px solid #2563eb;
+    padding-left: 12px;
+    line-height: 1.45;
+  }
+  h3 {
+    font-size: 17px;
+    margin-top: 30px;
+    color: #111;
+  }
+  p { margin: 12px 0; }
+  code {
+    background: #f4f4f5;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: "SF Mono", Monaco, Consolas, "Courier New", monospace;
+    font-size: 13.5px;
+    color: #be185d;
+  }
+  pre {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 14px 18px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  pre code {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+  }
+  table {
+    border-collapse: collapse;
+    margin: 18px 0;
+    width: 100%;
+    font-size: 14px;
+  }
+  th, td {
+    border: 1px solid #d4d4d8;
+    padding: 8px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: #f4f4f5; font-weight: 600; }
+  blockquote {
+    border-left: 4px solid #fbbf24;
+    background: #fffbeb;
+    margin: 18px 0;
+    padding: 12px 18px;
+    color: #78350f;
+  }
+  blockquote.tip {
+    border-left-color: #2563eb;
+    background: #eff6ff;
+    color: #1e3a8a;
+  }
+  .figure { margin: 28px 0; text-align: center; }
+  .figure-caption {
+    font-size: 13px;
+    color: #6b7280;
+    margin-top: 8px;
+    font-style: italic;
+  }
+  ul, ol { padding-left: 26px; }
+  li { margin: 6px 0; }
+  hr { border: none; border-top: 1px solid #e5e7eb; margin: 36px 0; }
+  .punchline {
+    background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+    border-left: 5px solid #d97706;
+    padding: 16px 20px;
+    margin: 24px 0;
+    font-size: 17px;
+    line-height: 1.7;
+    border-radius: 4px;
+  }
+</style>
+</head>
+<body>
+
+<h1>Claude Code 系统提示词拆解：Anthropic 都会翻车，你还觉得写 prompt 简单？</h1>
+
+<p>2026 年 4 月，Anthropic 发了一份不太常见的<a href="https://www.anthropic.com/engineering/april-23-postmortem" target="_blank">公开 postmortem</a>：他们承认 Claude Code 在过去一段时间出现了 coding quality 退化，并把根因之一归在了系统提示词里——<strong>仅仅两行字</strong>。</p>
+
+<pre><code>Length limits: keep text between tool calls to ≤25 words.
+Keep final responses to ≤100 words unless the task requires more detail.</code></pre>
+
+<p>这两行字 4 月 16 日上线、4 月 20 日回滚，broader eval 测出 <strong>Opus 4.6 和 4.7 的代码生成质量都掉了 3%</strong>。在此之前，他们做了几周的 internal testing，没抓到这个问题。</p>
+
+<p>这件事很有意思的地方在于：<strong>"两行字怎么能掉 3% 的质量"</strong>本身已经够荒诞了，但 Anthropic 自己跑了几周 eval 居然没测出来，更说明一件事——<strong>system prompt 这玩意儿，写起来谁都会，验证它真正难。</strong></p>
+
+<p>本文以 Claude Code 反编译版仓库为标本，做两件事：</p>
+
+<ol>
+  <li><strong>把模型在 <code>callModel</code> 那一刻看到的全部内容拆开</strong>，看 Anthropic 内部是按什么哲学组织 prompt 的；</li>
+  <li>从这套设计里反推：他们这次为什么会翻车？我们能学到什么。</li>
+</ol>
+
+<hr>
+
+<h2>一、模型最终看到的，是两个数组</h2>
+
+<p>很多人聊 system prompt，下意识把它当一个长字符串。但你打开 Anthropic API 的请求体会发现——<strong>能塞东西的位置只有两个：<code>system</code> 数组、<code>messages</code> 数组</strong>。Claude Code 把所有上下文都拆进这两个槽位里，怎么拆，就是它的设计哲学。</p>
+
+<div class="figure">
+<svg width="780" height="520" viewBox="0 0 780 520" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .label { font: 13px -apple-system, sans-serif; fill: #1f2328; }
+    .heading { font: bold 14px -apple-system, sans-serif; fill: #111; }
+    .subheading { font: 600 12px -apple-system, sans-serif; fill: #444; }
+    .small { font: 11px -apple-system, sans-serif; fill: #6b7280; }
+    .arrow { stroke: #6b7280; stroke-width: 1.5; fill: none; marker-end: url(#arr); }
+  </style>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6b7280"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="390" y="24" text-anchor="middle" class="heading" font-size="15">callModel 那一刻，模型看到的两个数组</text>
+
+  <!-- system[] container -->
+  <rect x="40" y="50" width="340" height="430" fill="#eff6ff" stroke="#2563eb" stroke-width="2" rx="6"/>
+  <text x="210" y="74" text-anchor="middle" class="heading" fill="#1e40af">system[]</text>
+  <text x="210" y="92" text-anchor="middle" class="small">长期约束 · 高缓存命中</text>
+
+  <!-- static sections -->
+  <rect x="60" y="108" width="300" height="22" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="70" y="124" class="label">Intro</text>
+  <rect x="60" y="132" width="300" height="22" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="70" y="148" class="label"># System</text>
+  <rect x="60" y="156" width="300" height="22" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="70" y="172" class="label"># Doing tasks</text>
+  <rect x="60" y="180" width="300" height="22" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="70" y="196" class="label"># Executing actions with care</text>
+  <rect x="60" y="204" width="300" height="22" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="70" y="220" class="label"># Using your tools</text>
+  <rect x="60" y="228" width="300" height="22" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="70" y="244" class="label"># Tone and style</text>
+  <text x="365" y="179" text-anchor="middle" class="small" transform="rotate(90 365 179)" fill="#1e40af">静态段（跨会话稳定）</text>
+
+  <!-- dynamic sections -->
+  <rect x="60" y="262" width="300" height="22" fill="#d1fae5" stroke="#6ee7b7"/>
+  <text x="70" y="278" class="label"># Language（按需）</text>
+  <rect x="60" y="286" width="300" height="22" fill="#d1fae5" stroke="#6ee7b7"/>
+  <text x="70" y="302" class="label"># Output Style（按需）</text>
+  <rect x="60" y="310" width="300" height="22" fill="#d1fae5" stroke="#6ee7b7"/>
+  <text x="70" y="326" class="label"># MCP Server Instructions（按需）</text>
+  <rect x="60" y="334" width="300" height="22" fill="#d1fae5" stroke="#6ee7b7"/>
+  <text x="70" y="350" class="label">Session-specific guidance / FRC ...</text>
+  <rect x="60" y="358" width="300" height="22" fill="#fef3c7" stroke="#fcd34d"/>
+  <text x="70" y="374" class="label">numeric_length_anchors（ant only）</text>
+  <text x="365" y="321" text-anchor="middle" class="small" transform="rotate(90 365 321)" fill="#065f46">动态段（按能力开关）</text>
+
+  <!-- memory / append -->
+  <rect x="60" y="392" width="300" height="22" fill="#f3e8ff" stroke="#c4b5fd"/>
+  <text x="70" y="408" class="label">memory（可选）/ appendSystemPrompt（可选）</text>
+
+  <!-- systemContext -->
+  <rect x="60" y="424" width="300" height="40" fill="#fee2e2" stroke="#fca5a5"/>
+  <text x="70" y="440" class="label">getSystemContext: gitStatus（key:value 拼成一段）</text>
+  <text x="70" y="456" class="small">branch / commit / status — 会话开局快照，不刷新</text>
+
+  <!-- messages[] container -->
+  <rect x="420" y="50" width="320" height="430" fill="#fef3c7" stroke="#d97706" stroke-width="2" rx="6"/>
+  <text x="580" y="74" text-anchor="middle" class="heading" fill="#92400e">messages[]</text>
+  <text x="580" y="92" text-anchor="middle" class="small">用户域 · 会话推进</text>
+
+  <!-- system-reminder -->
+  <rect x="440" y="110" width="280" height="120" fill="#fffbeb" stroke="#f59e0b" stroke-dasharray="4 2" rx="4"/>
+  <text x="450" y="128" class="subheading">⟨首条 user · isMeta⟩</text>
+  <text x="450" y="148" class="label">&lt;system-reminder&gt;</text>
+  <text x="450" y="166" class="label"># claudeMd</text>
+  <text x="460" y="182" class="small">CLAUDE.md（按优先级栈合并）</text>
+  <text x="450" y="200" class="label"># currentDate</text>
+  <text x="460" y="216" class="small">Today's date is YYYY-MM-DD.</text>
+
+  <!-- real conversation -->
+  <rect x="440" y="246" width="280" height="34" fill="#fef9c3" stroke="#eab308" rx="3"/>
+  <text x="450" y="266" class="label">user: 真实第一句话</text>
+  <rect x="440" y="286" width="280" height="34" fill="#dbeafe" stroke="#60a5fa" rx="3"/>
+  <text x="450" y="306" class="label">assistant: ...（含 tool_use）</text>
+  <rect x="440" y="326" width="280" height="34" fill="#fef9c3" stroke="#eab308" rx="3"/>
+  <text x="450" y="346" class="label">user: tool_result</text>
+  <rect x="440" y="366" width="280" height="34" fill="#dbeafe" stroke="#60a5fa" rx="3"/>
+  <text x="450" y="386" class="label">assistant: ...</text>
+  <text x="580" y="425" text-anchor="middle" class="small">真实轮次（会随对话增长）</text>
+
+  <text x="580" y="448" text-anchor="middle" class="small" fill="#92400e">注：&lt;system-reminder&gt; 是首条 user 消息，但</text>
+  <text x="580" y="462" text-anchor="middle" class="small" fill="#92400e">isMeta=true，UI 不显示，模型可见</text>
+
+</svg>
+<div class="figure-caption">图 1：模型在 callModel 那一刻看到的全部内容。左边 system[] 由稳定到易变自上而下排列；右边 messages[] 首条是包成 &lt;system-reminder&gt; 的 user 消息，承载 CLAUDE.md 与日期。</div>
+</div>
+
+<p>这张图是本文的全局坐标系。后面所有讨论都可以挂回到上面的某个色块上。先给一句话总览：</p>
+
+<blockquote class="tip"><strong>system 是"长期约束"，messages 首条 reminder 是"会话开局事实快照 + 项目偏好"，真实对话从第二条起算。</strong></blockquote>
+
+<p>注意几个反直觉的点：</p>
+
+<ul>
+  <li><strong>git 状态不在 messages 里，在 system 数组末尾。</strong>它是从 <code>git status --short</code> 拿到的字典，被 <code>appendSystemContext</code> 拼成 <code>key: value</code> 一段挂在 system 末尾——理由后面讲。</li>
+  <li><strong>CLAUDE.md 不在 system 里，在 messages 首条。</strong>而且包了一层 <code>&lt;system-reminder&gt;</code> 防止模型当用户问题去答——理由后面讲。</li>
+  <li><strong>有的段是"按 ant / 非 ant"分叉的。</strong>比如那两行翻车的 <code>numeric_length_anchors</code>，源码里就 ant only——意思是 Anthropic 内部员工先用一段时间——这恰恰是这次 postmortem 的关键。</li>
+</ul>
+
+<hr>
+
+<h2>二、拼装链：从三份原料到两个槽位</h2>
+
+<p>看完模型最终看到啥，再看 Claude Code 怎么把它拼出来。这条链路非常清晰，三个步骤就讲完。</p>
+
+<div class="figure">
+<svg width="780" height="430" viewBox="0 0 780 430" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .lbl { font: 13px -apple-system, sans-serif; fill: #1f2328; }
+    .ttl { font: bold 14px -apple-system, sans-serif; fill: #111; }
+    .sm { font: 11px -apple-system, sans-serif; fill: #6b7280; }
+    .mn { font: 12px "SF Mono", monospace; fill: #be185d; }
+  </style>
+  <defs>
+    <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <text x="390" y="22" text-anchor="middle" class="ttl" font-size="15">三份原料 → 两个出口</text>
+
+  <!-- 三份原料 -->
+  <rect x="40" y="60" width="220" height="60" fill="#fef3c7" stroke="#d97706" rx="5"/>
+  <text x="50" y="80" class="ttl">defaultSystemPrompt[]</text>
+  <text x="50" y="98" class="sm">由 getSystemPrompt() 产出</text>
+  <text x="50" y="113" class="sm">14+ 段静态/动态文本（数组）</text>
+
+  <rect x="40" y="140" width="220" height="60" fill="#fee2e2" stroke="#dc2626" rx="5"/>
+  <text x="50" y="160" class="ttl">systemContext{}</text>
+  <text x="50" y="178" class="sm">由 getSystemContext() 产出</text>
+  <text x="50" y="193" class="sm">{ gitStatus: "..." } 等</text>
+
+  <rect x="40" y="220" width="220" height="60" fill="#fef9c3" stroke="#ca8a04" rx="5"/>
+  <text x="50" y="240" class="ttl">userContext{}</text>
+  <text x="50" y="258" class="sm">由 getUserContext() 产出</text>
+  <text x="50" y="273" class="sm">{ claudeMd, currentDate }</text>
+
+  <text x="150" y="318" text-anchor="middle" class="sm">来源：fetchSystemPromptParts()</text>
+  <text x="150" y="332" text-anchor="middle" class="sm">src/utils/queryContext.ts</text>
+
+  <!-- 中间组装函数 -->
+  <rect x="320" y="60" width="200" height="80" fill="#dbeafe" stroke="#2563eb" rx="5"/>
+  <text x="420" y="84" text-anchor="middle" class="ttl">asSystemPrompt()</text>
+  <text x="420" y="103" text-anchor="middle" class="sm">defaultSystemPrompt</text>
+  <text x="420" y="118" text-anchor="middle" class="sm">+ memory（可选）</text>
+  <text x="420" y="133" text-anchor="middle" class="sm">+ append（可选）</text>
+
+  <rect x="320" y="160" width="200" height="60" fill="#fee2e2" stroke="#dc2626" rx="5"/>
+  <text x="420" y="184" text-anchor="middle" class="ttl">appendSystemContext()</text>
+  <text x="420" y="203" text-anchor="middle" class="sm">把 systemContext 拼成</text>
+  <text x="420" y="217" text-anchor="middle" class="sm">"key: value" 加在末尾</text>
+
+  <rect x="320" y="240" width="200" height="60" fill="#fef9c3" stroke="#ca8a04" rx="5"/>
+  <text x="420" y="264" text-anchor="middle" class="ttl">prependUserContext()</text>
+  <text x="420" y="283" text-anchor="middle" class="sm">把 userContext 包成</text>
+  <text x="420" y="297" text-anchor="middle" class="sm">&lt;system-reminder&gt; 插 messages 头</text>
+
+  <text x="420" y="328" text-anchor="middle" class="sm">src/utils/api.ts</text>
+
+  <!-- 两个出口 -->
+  <rect x="580" y="80" width="170" height="120" fill="#eff6ff" stroke="#2563eb" stroke-width="2" rx="6"/>
+  <text x="665" y="104" text-anchor="middle" class="ttl" fill="#1e40af">system[]</text>
+  <text x="665" y="124" text-anchor="middle" class="sm">静态段</text>
+  <text x="665" y="140" text-anchor="middle" class="sm">动态段</text>
+  <text x="665" y="156" text-anchor="middle" class="sm">memory / append</text>
+  <text x="665" y="172" text-anchor="middle" class="sm">───────</text>
+  <text x="665" y="188" text-anchor="middle" class="sm" fill="#dc2626">systemContext 一段</text>
+
+  <rect x="580" y="220" width="170" height="100" fill="#fef3c7" stroke="#d97706" stroke-width="2" rx="6"/>
+  <text x="665" y="244" text-anchor="middle" class="ttl" fill="#92400e">messages[]</text>
+  <text x="665" y="264" text-anchor="middle" class="sm" fill="#ca8a04">⟨reminder: userContext⟩</text>
+  <text x="665" y="280" text-anchor="middle" class="sm">user: ...</text>
+  <text x="665" y="296" text-anchor="middle" class="sm">assistant: ...</text>
+  <text x="665" y="312" text-anchor="middle" class="sm">...</text>
+
+  <!-- 箭头 -->
+  <path class="arrow" d="M 260 90 L 320 90" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arr2)"/>
+  <path class="arrow" d="M 260 170 L 320 190" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arr2)"/>
+  <path class="arrow" d="M 260 250 L 320 270" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arr2)"/>
+
+  <path class="arrow" d="M 520 100 L 580 130" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arr2)"/>
+  <path class="arrow" d="M 520 190 L 580 180" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arr2)"/>
+  <path class="arrow" d="M 520 270 L 580 260" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arr2)"/>
+
+  <!-- 底部说明 -->
+  <text x="390" y="385" text-anchor="middle" class="lbl">注：QueryEngine.ts 调用 fetchSystemPromptParts → query.ts 在 line 448-449 调 asSystemPrompt + appendSystemContext，</text>
+  <text x="390" y="402" text-anchor="middle" class="lbl">在 line 654 调 prependUserContext。三份原料、三个组装函数、两个出口。</text>
+
+</svg>
+<div class="figure-caption">图 2：拼装链。三份原料经过三个组装函数，分流进 system[] 和 messages[] 两个槽位。注意 systemContext 和 userContext 走的是不同函数、落的是不同槽位——这是设计的关键。</div>
+</div>
+
+<p>关键代码位置（方便回查）：</p>
+
+<ul>
+  <li><code>src/utils/queryContext.ts</code> · <code>fetchSystemPromptParts()</code>：同时产出三份原料</li>
+  <li><code>src/utils/systemPromptType.ts</code> · <code>asSystemPrompt()</code>：把字符串数组规整为 system 数组</li>
+  <li><code>src/utils/api.ts</code> · <code>appendSystemContext()</code>：把 <code>{key: value}</code> 拼成 <code>"key: value\n..."</code> 加到 system 数组末尾</li>
+  <li><code>src/utils/api.ts</code> · <code>prependUserContext()</code>：把 <code>{key: value}</code> 包成 <code>&lt;system-reminder&gt;</code> 的首条 user 消息插到 messages 最前</li>
+  <li><code>src/query.ts</code>：实际调用点（先 <code>asSystemPrompt + appendSystemContext</code>，发请求前再 <code>prependUserContext</code>）</li>
+</ul>
+
+<p>真正值得追问的不是"代码长啥样"，而是：<strong>为什么明明都是"会话级一次性的环境信息"，git 状态走 system 通道，CLAUDE.md 走 messages 通道？</strong></p>
+
+<hr>
+
+<h2>三、设计哲学：稳定性分层 × 缓存边界</h2>
+
+<p>Claude Code 这套结构不是随便摆的，它对齐的是 Anthropic 自家 API 的<a href="https://platform.claude.com/docs/en/build-with-claude/prompt-caching" target="_blank">官方 prompt caching 模型</a>。文档原话推荐：<strong>最多 4 个 cache breakpoint，从 most-stable 排到 most-volatile</strong>。</p>
+
+<div class="figure">
+<svg width="780" height="380" viewBox="0 0 780 380" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .ttl3 { font: bold 14px -apple-system, sans-serif; fill: #111; }
+    .lbl3 { font: 13px -apple-system, sans-serif; fill: #1f2328; }
+    .sm3 { font: 11px -apple-system, sans-serif; fill: #6b7280; }
+    .num { font: bold 16px -apple-system, sans-serif; fill: #fff; }
+  </style>
+
+  <text x="390" y="22" text-anchor="middle" class="ttl3" font-size="15">官方 4-breakpoint 模型 vs Claude Code 的实现</text>
+
+  <!-- 左边：官方模型 -->
+  <text x="180" y="55" text-anchor="middle" class="ttl3">Anthropic 官方建议</text>
+  <text x="180" y="73" text-anchor="middle" class="sm3">most-stable → most-volatile</text>
+
+  <rect x="60" y="90" width="240" height="48" fill="#1e40af" rx="4"/>
+  <circle cx="80" cy="114" r="13" fill="#fff"/>
+  <text x="80" y="119" text-anchor="middle" class="num" fill="#1e40af">1</text>
+  <text x="105" y="110" class="lbl3" fill="#fff">tools 定义</text>
+  <text x="105" y="128" class="sm3" fill="#bfdbfe">几乎不变</text>
+
+  <rect x="60" y="146" width="240" height="48" fill="#2563eb" rx="4"/>
+  <circle cx="80" cy="170" r="13" fill="#fff"/>
+  <text x="80" y="175" text-anchor="middle" class="num" fill="#2563eb">2</text>
+  <text x="105" y="166" class="lbl3" fill="#fff">静态 instructions</text>
+  <text x="105" y="184" class="sm3" fill="#bfdbfe">行为约束、人格守则</text>
+
+  <rect x="60" y="202" width="240" height="48" fill="#3b82f6" rx="4"/>
+  <circle cx="80" cy="226" r="13" fill="#fff"/>
+  <text x="80" y="231" text-anchor="middle" class="num" fill="#3b82f6">3</text>
+  <text x="105" y="222" class="lbl3" fill="#fff">RAG / 上下文文档</text>
+  <text x="105" y="240" class="sm3" fill="#dbeafe">大块、中频更新</text>
+
+  <rect x="60" y="258" width="240" height="48" fill="#60a5fa" rx="4"/>
+  <circle cx="80" cy="282" r="13" fill="#fff"/>
+  <text x="80" y="287" text-anchor="middle" class="num" fill="#60a5fa">4</text>
+  <text x="105" y="278" class="lbl3" fill="#fff">conversation history</text>
+  <text x="105" y="296" class="sm3" fill="#dbeafe">每轮都长</text>
+
+  <!-- 右边：CC 实现 -->
+  <text x="580" y="55" text-anchor="middle" class="ttl3">Claude Code 的工程化映射</text>
+  <text x="580" y="73" text-anchor="middle" class="sm3">几乎是教科书答案</text>
+
+  <rect x="460" y="90" width="240" height="48" fill="#1e40af" rx="4"/>
+  <text x="470" y="110" class="lbl3" fill="#fff">tools 数组（含 MCP 工具）</text>
+  <text x="470" y="128" class="sm3" fill="#bfdbfe">单独 cacheScope: 'org'</text>
+
+  <rect x="460" y="146" width="240" height="48" fill="#2563eb" rx="4"/>
+  <text x="470" y="166" class="lbl3" fill="#fff">system[] 静态段（Intro ~ Tone）</text>
+  <text x="470" y="184" class="sm3" fill="#bfdbfe">getSimpleIntroSection 等</text>
+
+  <rect x="460" y="202" width="240" height="48" fill="#3b82f6" rx="4"/>
+  <text x="470" y="222" class="lbl3" fill="#fff">动态段 + systemContext (gitStatus)</text>
+  <text x="470" y="240" class="sm3" fill="#dbeafe">会话内稳定，跨会话变</text>
+
+  <rect x="460" y="258" width="240" height="48" fill="#60a5fa" rx="4"/>
+  <text x="470" y="278" class="lbl3" fill="#fff">messages[]（含 user reminder）</text>
+  <text x="470" y="296" class="sm3" fill="#dbeafe">CLAUDE.md + 真实对话</text>
+
+  <!-- 连线 -->
+  <line x1="305" y1="114" x2="455" y2="114" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3 3"/>
+  <line x1="305" y1="170" x2="455" y2="170" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3 3"/>
+  <line x1="305" y1="226" x2="455" y2="226" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3 3"/>
+  <line x1="305" y1="282" x2="455" y2="282" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3 3"/>
+
+  <text x="390" y="345" text-anchor="middle" class="lbl3">核心约束：cache 是 prefix hash 命中。一字之差，整段缓存就废。</text>
+  <text x="390" y="362" text-anchor="middle" class="sm3">所以"会变的"必须挪到后面、或者换槽位——把破坏关在更小的边界里。</text>
+
+</svg>
+<div class="figure-caption">图 3：CC 的 system 数组排序，本质上是 Anthropic 官方 cache 模型的工程化实现。</div>
+</div>
+
+<p>这张图给出第一条设计哲学：<strong>cache 是 prefix hash 命中——一段文字若想被缓存，从开头到它结尾这一整段每次请求都必须完全一致。</strong>反过来说，越靠前的段必须越稳定，否则会拖累后面所有段的缓存。</p>
+
+<p>把这条原理套回 CC 的设计：</p>
+
+<ul>
+  <li><strong>静态段（Intro / # System / # Doing tasks / ...）放最前。</strong>它们只随 CLI 版本和 <code>USER_TYPE</code> 变化，跨请求几乎全命中。这一段被 Anthropic 视作"<a href="https://www.anthropic.com/engineering/april-23-postmortem" target="_blank">人格 + 工程契约</a>"，改动需要走完整 eval 流程。</li>
+  <li><strong>动态段（Language / MCP / Scratchpad / numeric_length_anchors / ...）放中间。</strong>"按能力开关"出现：用户开了什么、ant 还是非 ant、有没有连 MCP。这些在<em>会话内</em>不变，仍享会话级缓存；但跨会话会变，所以排在静态段之后。</li>
+  <li><strong>systemContext（gitStatus）放 system 数组最末。</strong>它是"会话开局快照"——branch、commit、status 跨会话都在变，但<em>会话内</em>不刷新（源码注释明确 "snapshot in time, will not update during the conversation"）。放最末是为了：跨会话变化时，前面所有段的缓存仍可保留。</li>
+</ul>
+
+<h3>实现层的兜底：会话内 byte-by-byte 一致</h3>
+
+<p>"动态段在会话内不变"听起来像废话——MCP 列表不会变、用户语言偏好不会变，<strong>字符串自然就是同一串</strong>，对吧？不全对。看 <code># Function Result Clearing</code> 这种段，背后是个函数 <code>getFunctionResultClearingSection(model)</code>，理论上每次 callModel 都重新调一次。<strong>哪怕实现里没显式取时间戳、没读全局可变状态，"实现一不小心引入非决定性"始终是个风险</strong>——而 KV cache 是 prefix hash 命中，<strong>一个字节差，整段缓存就废</strong>。</p>
+
+<p>CC 的兜底是 <strong>section 级的会话级 memo cache</strong>。<code>resolveSystemPromptSections</code> 在调每段的 <code>compute()</code> 之前先查缓存，命中就直接返回上次结果，根本不再 compute：</p>
+
+<pre><code>return Promise.all(
+  sections.map(async s =&gt; {
+    if (!s.cacheBreak &amp;&amp; cache.has(s.name)) {
+      return cache.get(s.name) ?? null   // 命中 → 直接返回上次值
+    }
+    const value = await s.compute()
+    setSystemPromptSectionCacheEntry(s.name, value)
+    return value
+  }),
+)</code></pre>
+
+<p>效果就是：<strong>会话第一轮把每段算一次并缓存；之后所有轮次直接从 cache 取</strong>——动态段的产出在整个会话里 byte-by-byte 一致，下游 KV cache 的 prefix hash 稳稳命中。</p>
+
+<p>同样的会话级 memo 也作用在 <code>getSystemContext</code>（gitStatus 那段）和 <code>getUserContext</code>（CLAUDE.md + currentDate）上——前者直接 memoize 函数结果，后者依赖文件读取的层层缓存。最终的不变量是：<strong>同一个会话内，发给模型的 system 数组每一字节都和上一轮相同</strong>。</p>
+
+<p>唯一的逃生口是 <code>s.cacheBreak</code>——比如调试用的 <code>BREAK_CACHE_COMMAND</code> 会主动塞一个 <code>cacheBreaker</code> 段来强制打破 prompt cache。这是显式 opt-out，平时不走。</p>
+
+<blockquote class="tip"><strong>一句话理解：缓存要求"会变的内容靠后 + 不变的内容真的不变"。CC 既靠位置安排做了"靠后"，又靠 section 级 memo 做了"真的不变"——两层保险叠加，KV cache 才能稳稳命中。</strong></blockquote>
+
+<hr>
+
+<h2>四、段落总览：每段在教模型啥</h2>
+
+<p>有了排序的设计哲学（图 3），自然要回答下一个问题：<strong>每段具体在告诉模型什么？</strong>下面两张表分别对应"永远在的静态段"和"按开关出现的动态段"，挑出每段最核心的一句话作用——遇到要扒细节再回 <code>src/constants/prompts.ts</code> 看原文。</p>
+
+<h3>静态段（永远在）</h3>
+
+<table>
+<thead>
+<tr><th style="width:30%">段名</th><th>核心作用（一句话）</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Intro</code></td><td>交代 agent 身份（"interactive agent for software engineering"）、安全立场（CTF / 防御性安全 OK，破坏性 / 大规模目标拒绝）、URL 不乱编原则。</td></tr>
+<tr><td><code># System</code></td><td>运行时基础约定：tool 输出对用户可见、user-selected permission mode、<code>&lt;system-reminder&gt;</code> 含义、tool result 可能含外部数据需警惕注入、hook 反馈视同用户、自动压缩历史的存在。</td></tr>
+<tr><td><code># Doing tasks</code></td><td>任务方法论：把模糊请求按工程语境理解、<strong>读代码再改</strong>、不新建无谓文件、不留兼容 hack、安全意识、失败先诊断再换招、<code>/help</code> 与反馈通道。</td></tr>
+<tr><td><code># Executing actions with care</code></td><td>风险动作守则：考虑可逆性与 blast radius、<code>rm -rf</code>·force push·DROP TABLE 这类必须先确认、上传第三方服务前思考是否敏感、不用 <code>--no-verify</code> 走捷径。</td></tr>
+<tr><td><code># Using your tools</code></td><td>工具优先级：专用工具优先于 Bash、TaskCreate 跟踪进度、独立操作并行调用、依赖操作顺序调用。</td></tr>
+<tr><td><code># Tone and style</code></td><td>语气与格式：emoji 默认禁用、引用代码用 <code>file_path:line_number</code>、引用 GitHub issue 用 <code>owner/repo#123</code>、tool call 前不加冒号——这些都是 UI 渲染层面的硬约束。</td></tr>
+</tbody>
+</table>
+
+<h3>动态段（按开关出现）</h3>
+
+<table>
+<thead>
+<tr><th style="width:24%">段名</th><th style="width:32%">启用条件</th><th>核心作用</th></tr>
+</thead>
+<tbody>
+<tr><td><code># Language</code></td><td>设了 <code>languagePreference</code></td><td>强制输出语言（"Always respond in &lt;lang&gt;"）。</td></tr>
+<tr><td><code># Output Style</code></td><td>设了 <code>outputStyle</code>（Explanatory / Learning / 自定义）</td><td>注入对应 Markdown 风格 prompt——比如 Explanatory 就让模型一边写代码一边讲设计权衡。</td></tr>
+<tr><td><code># MCP Server Instructions</code></td><td>至少连了一个带 instructions 的 MCP server</td><td>把每个 MCP server 自带的 instructions 拼进来，让模型知道怎么用。</td></tr>
+<tr><td><code># Scratchpad Directory</code></td><td><code>isScratchpadEnabled()</code></td><td>告诉模型 scratchpad 路径——"这里读写不需要授权，跨 worker 共享知识可以放这"。</td></tr>
+<tr><td><code># Function Result Clearing</code></td><td><code>feature('CACHED_MICROCOMPACT')</code> 等</td><td>预告"老 tool result 会被自动清理"，让模型知道要主动留笔记。</td></tr>
+<tr><td><code>summarize_tool_results</code></td><td>几乎永远开</td><td>提醒"重要信息记到回复里，原始 tool result 可能被清"。和 FRC 配套。</td></tr>
+<tr><td><code>Session-specific guidance</code></td><td>取决于工具集 / 会话状态</td><td>动态拼接的提示：<code>! &lt;command&gt;</code> 用法、Agent / Explore / Skill 何时该叫、verification contract（ant only）。</td></tr>
+<tr><td><code>numeric_length_anchors</code></td><td><code>USER_TYPE === 'ant'</code></td><td>"工具间 ≤25 词、最终 ≤100 词"——4 月翻车主角，第七节再讲。</td></tr>
+<tr><td><code>token_budget</code></td><td><code>feature('TOKEN_BUDGET')</code></td><td>用户给了 token 目标时，让模型持续工作直到接近目标。</td></tr>
+<tr><td><code>brief</code></td><td><code>feature('KAIROS')</code> 或 <code>KAIROS_BRIEF</code></td><td>KAIROS 模式专用 brief 段（KAIROS 是另一种产品形态，本文不展开）。</td></tr>
+</tbody>
+</table>
+
+<h3>用户/调用方注入段（memory · appendSystemPrompt）</h3>
+
+<p>动态段之后、systemContext 之前，还夹着两类<strong>由调用方注入</strong>的段——它们不归 Anthropic 写死、不靠 feature flag 开关，而是按运行时配置/环境拼进去：</p>
+
+<table>
+<thead>
+<tr><th style="width:30%">段名</th><th style="width:32%">出现条件</th><th>核心作用</th></tr>
+</thead>
+<tbody>
+<tr>
+<td><code>memory</code></td>
+<td>设了 <code>customSystemPrompt</code> 且环境变量 <code>CLAUDE_COWORK_MEMORY_PATH_OVERRIDE</code> 指向了外部记忆目录</td>
+<td>追加 <code>loadMemoryPrompt()</code> 的返回值——教模型怎么读写外部记忆系统（什么该存 / 什么不存 / 索引文件怎么维护）。普通 CLI 用户基本看不到这段。</td>
+</tr>
+<tr>
+<td><code>appendSystemPrompt</code></td>
+<td>用户传了 <code>--append-system-prompt</code> 或 SDK 设了同名字段；CLI 还会把 Chrome 集成、proactive 提示等拼进同一段</td>
+<td>不规定内容，<strong>"用户想往 system prompt 末尾加什么就加什么"</strong>——SDK / 工作流向这里塞领域知识、组织规范、特定任务约束都可以。</td>
+</tr>
+</tbody>
+</table>
+
+<p>这两段在图 1 里是紫色那一条，位置上正好夹在"Anthropic 给的"和"环境拼出来的"中间——语义也确实如此：<strong>它是"调用方/用户对默认 prompt 的扩展位"</strong>。</p>
+
+<blockquote class="tip">特例提醒：如果调用方设了 <code>customSystemPrompt</code>（SDK 显式接管人格），<code>defaultSystemPrompt</code> 数组直接清空、systemContext 也清空——上面两张表里的所有段都不再出现，<strong>只留 memory / appendSystemPrompt 两段</strong>。这是 SDK 用户做 agent 二次封装时的常见姿态。</blockquote>
+
+<h3>system 数组的尾巴：systemContext（gitStatus）</h3>
+
+<p>不在上面两张表里、但属于 system 数组的最后一段——由 <code>appendSystemContext()</code> 拼接：</p>
+
+<pre><code>This is the git status at the start of the conversation. Note that
+this status is a snapshot in time, and will not update during the
+conversation.
+
+Current branch: main
+Main branch (you will usually use this for PRs): main
+Git user: TimeMagic
+Status:
+ M src/QueryEngine.ts
+ M src/query.ts
+ ...
+
+Recent commits:
+bc2af2b update note
+3ac7c0f update note
+...</code></pre>
+
+<p>会话开局算一次，整个对话期间不刷新——这点对模型很关键，因为它意味着<em>模型看到的 git 状态可能已经过时</em>，需要时应主动跑 <code>git status</code>。</p>
+
+<blockquote class="tip">读到这能感受到一件事：<strong>每一段的措辞、出现条件、所在位置，都对应一个具体的工程问题。</strong>"# Tone and style"为什么会在静态段里、numeric_length_anchors 为什么会单独 ant only——这些不是写 prompt 的人随手敲的。下一节会看到，仓库里大量分叉，正是 Anthropic 评测 + 模型迭代留下的脚印。</blockquote>
+
+<hr>
+
+<h2>五、ant 与非 ant：精选差异表</h2>
+
+<p>仓库里能搜到一堆 <code>process.env.USER_TYPE === 'ant'</code> 分支，是观察 Anthropic 内部 prompt 设计取向的好窗口。我从原 14 行对照表里挑了 7 条最有记忆点的：</p>
+
+<table>
+<thead>
+<tr><th>维度</th><th>非 ant（公开版）</th><th>ant（内部）</th><th>设计取向</th></tr>
+</thead>
+<tbody>
+<tr>
+<td>Tone 总纲</td>
+<td><code># Output efficiency</code><br>"直给、压短"</td>
+<td><code># Communicating with the user</code><br>"写给人看的"</td>
+<td>内部能消化更长的更新；外部用户更怕话痨</td>
+</tr>
+<tr>
+<td>简洁度兜底</td>
+<td>"Your responses should be short and concise."</td>
+<td>无这一句</td>
+<td>非 ant 再压一层短；ant 不压</td>
+</tr>
+<tr>
+<td>注释纪律</td>
+<td>无</td>
+<td>"默认不写注释；只写 WHY；不解释 WHAT；不引用任务"</td>
+<td>新一代模型默认爱写啰嗦注释，加一段把它压回来</td>
+</tr>
+<tr>
+<td>忠实汇报</td>
+<td>无</td>
+<td>"不能把失败说成成功；不能把未跑测试说成已跑"</td>
+<td>内部测出某代模型谎报成功的比例从 16.7% 升到 29~30%，加一段反制</td>
+</tr>
+<tr>
+<td>误解纠偏</td>
+<td>无</td>
+<td>"如果用户的请求基于误解，明确指出来"</td>
+<td>把模型从执行者推向协作者</td>
+</tr>
+<tr>
+<td>完成验证</td>
+<td>无</td>
+<td>"报告完成前必须实际验证（跑测试 / 执行脚本 / 看输出）"</td>
+<td>新一代模型有"草草收尾"倾向（不跑测试就说完事了），加一段强制验证</td>
+</tr>
+<tr>
+<td>numeric_length_anchors</td>
+<td>无</td>
+<td>"工具间 ≤25 词；最终回复 ≤100 词"</td>
+<td>ant-only 灰度——这个段就是这次翻车的主角</td>
+</tr>
+</tbody>
+</table>
+
+<p>看完这张表能拎出一个规律：<strong>ant 版本不是"另一种 prompt"，而是在公开版基础上叠了三类补丁——注释纪律、忠实汇报、反验证。每一条都对应一次模型迭代里观察到的偏差倾向，prompt 里加一段把它压回来。</strong>这种"<strong>偏差出现 → ant 版先加补丁 → 外部 A/B 验证 → 全量下放</strong>"的节奏，源码里到处可见，比如：</p>
+
+<pre><code>// @[MODEL LAUNCH]: thoroughness counterweight
+//                  — un-gate once validated on external via A/B
+...(process.env.USER_TYPE === 'ant'
+  ? [`Before reporting a task complete, verify it actually works...`]
+  : [])</code></pre>
+
+<p>翻译过来就是："新模型有草草收尾的倾向，ant 版 prompt 里先加一段强制验证压住；等外部 A/B 验证 OK 之后再下放给所有用户。"</p>
+
+<p>这是 Anthropic 处理 prompt 改动的标准节奏：<strong>ant-only 是改动的灰度槽，外部公开版是 ant 验证过的稳定层。</strong>——而这正是下一节那次翻车的关键背景。</p>
+
+<hr>
+
+<h2>六、写 prompt 容易，做评测难——回到 4 月的翻车现场</h2>
+
+<p>讲完结构，回到开头那个故事。</p>
+
+<p>2026 年 4 月，Anthropic 在 Opus 4.7 发布时，往 Claude Code 的 system prompt 里加了那两行字。动机很合理：4.7 比前代更话痨，加一个数字锚点压一下输出长度。源码注释里有量化指标：</p>
+
+<blockquote>"research shows ~1.2% output token reduction vs qualitative 'be concise'. Ant-only to measure quality impact first."</blockquote>
+
+<p>翻译：定量评测确认能省 1.2% 输出 token，比"be concise"这种定性约束有效；先 ant-only 测 quality 影响。</p>
+
+<p>看流程，是<strong>非常负责任的 prompt 设计</strong>——有量化对照、有 ant-only 灰度、有 quality 监测。</p>
+
+<p>然后呢？4 月 16 日上线、4 月 20 日回滚，broader eval 测出 Opus 4.6 和 4.7 都掉了 3% 的 coding quality。<strong>internal testing 跑了几周，没抓到。</strong></p>
+
+<p>更糟糕的是这两行字不是单独翻车的——同期还有两件事：</p>
+
+<ul>
+  <li>3 月 4 日把默认 reasoning effort 从 high 降到 medium（4 月 7 日回滚）</li>
+  <li>chain-of-thought 的 conversation history 在 idle gap 之后被错误剪枝（4 月 10 日 v2.1.101 修复）</li>
+</ul>
+
+<p>三件事在时间上重叠，让用户体验显著下降——但内部归因极困难，因为每件事单测都"过了"。</p>
+
+<h3>仓库里能看到的"评测脚印"</h3>
+
+<p>Anthropic 不是没做评测。仓库里到处是评测留下的痕迹：</p>
+
+<p><strong>1. eval set + 小样本 A/B：</strong></p>
+
+<pre><code>// src/memdir/memoryTypes.ts
+// Eval-validated (memory-prompt-iteration.eval.ts, 2026-03-17):
+//   H1 (verify function/file claims): 0/2 → 3/3 via appendSystemPrompt.
+//   When buried as a bullet under "When to access", dropped to 0/3
+//   — position matters.</code></pre>
+
+<p>评测精确到"同一段文字、不同标题、不同位置"——3/3 vs 0/3 的对照能让人接受"换个标题改善 100%"这种结论。</p>
+
+<p><strong>2. <code>tengu_*</code> GrowthBook flag 满天飞：</strong></p>
+
+<p><code>tengu_hive_evidence</code>、<code>tengu_moth_copse</code>、<code>tengu_coral_fern</code>、<code>tengu_passport_quail</code>……每一个都对应一次线上分桶。这套基础设施做得很扎实。</p>
+
+<p><strong>3. <code>USER_TYPE === 'ant'</code> 内部灰度槽：</strong></p>
+
+<p>每一条 ant-only 的 prompt 文案都标注了 <code>@[MODEL LAUNCH]: ... un-gate once validated on external via A/B</code> ——节奏定义很明确：先内部、再外推。</p>
+
+<h3>那为什么还是翻车？</h3>
+
+<p>postmortem 里 Anthropic 自己给了答案——<strong>不是测不准，是测得不全。</strong></p>
+
+<p>引用原话（要点）：</p>
+
+<ul>
+  <li>"我们的初始 eval suite 没覆盖到这个回归";</li>
+  <li>"只有当我们跑了 broader set of evaluations 和 ablations，才发现 3% drop";</li>
+  <li>承诺改进：<strong>per-model eval suite</strong>（每个模型一份完整 eval）、<strong>per-line ablation</strong>（每改一行单独 ablation）、<strong>soak periods</strong>（更长 dogfood 期）、<strong>gradual rollouts</strong>（更细的灰度）、以及<strong>专门的 prompt 改动 review/audit 工具</strong>。</li>
+</ul>
+
+<p>翻译成给我们看的教训：</p>
+
+<ol>
+  <li><strong>eval suite 的覆盖盲区比 noise 危险得多。</strong>你以为通过了，其实根本没测到。1.2% 输出 token 节省的指标是<em>测了的</em>；coding quality 的指标当时<em>没在 suite 里</em>，等到加上才看到 3% drop。</li>
+  <li><strong>改一行也得 ablation，不能只测整体。</strong>Anthropic 直接承诺这件事——意味着他们之前是混在一起测的。我们做 prompt 工程时同样：加 5 句新指令、去 1 句旧指令，整体跑通过了不代表这 6 个改动每一个都净正向。</li>
+  <li><strong>多个改动同时上线 = 联合分布没被测过。</strong>reasoning effort + caching bug + length anchors 三件事单独看可能各自影响轻微，叠加在一起就显著。这也是 CC 仓库里大量 feature flag 存在的部分原因——支持单变量回滚。但<em>有 flag 不等于会用</em>，三件事仍是同期上线的。</li>
+  <li><strong>"ant-only 内部 dogfood"是必要不充分条件。</strong>Anthropic 内部员工的使用模式不能完全代表外部开发者——内部更多是仓库探索、prompt 调试，外部更多是真实代码项目。1.2% token 节省在内部场景显形了，3% coding quality drop 在内部没显形。</li>
+  <li><strong>定性的 quality metric 是最难的部分。</strong>token 数、词数这种 proxy metric 容易测；而 coding quality 是 long-tail——很多任务要等用户用一阵之后才显出问题。LLM-as-judge 也未必可信，因为它和被评模型同源、有相似偏差。</li>
+</ol>
+
+<div class="punchline">
+<strong>Punchline：prompt 不是写出来的，是评测出来的。</strong>Anthropic 这次翻车告诉我们，连他们自己——掌握模型权重、有完整 eval 基础设施、有内部灰度通道、有定量 token 节省数据——都会因为 eval suite 的盲区掉 3% coding quality 4 天。
+</div>
+
+<p>关于 prompt 评测应该怎么做、覆盖到什么程度才算够、LLM-as-judge 在 coding quality 上能不能信——欢迎来评论区聊聊你们的实践。下一篇打算讲 <strong>上下文管理与压缩机制</strong>：当对话一路推进、token 越来越多时，CC 怎么决定砍哪部分、留哪部分、何时一次性总结。</p>
+
+<hr>
+
+<h3>参考资料</h3>
+<ul>
+  <li><a href="https://www.anthropic.com/engineering/april-23-postmortem" target="_blank">An update on recent Claude Code quality reports — Anthropic Engineering</a></li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/prompt-caching" target="_blank">Prompt caching — Claude API Docs</a></li>
+  <li><a href="https://kirshatrov.com/posts/claude-code-internals" target="_blank">Reverse engineering Claude Code — Kir Shatrov</a></li>
+  <li><a href="https://weaxsey.org/en/articles/2025-10-12/" target="_blank">A Brief Analysis of Claude Code's Execution and Prompts — Weaxs</a></li>
+</ul>
+
+</body>
+</html>
