@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Claude Code 上下文管理拆解：朴素 agent loop 撑不到 30 轮，CC 在 LLM 调用前藏了 5 道关</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+    max-width: 860px;
+    margin: 40px auto;
+    padding: 0 24px 80px;
+    color: #1f2328;
+    line-height: 1.78;
+    font-size: 16px;
+    background: #fff;
+  }
+  h1 {
+    font-size: 26px;
+    line-height: 1.45;
+    border-bottom: 2px solid #1f2328;
+    padding-bottom: 14px;
+    margin-bottom: 28px;
+  }
+  h2 {
+    font-size: 21px;
+    margin-top: 44px;
+    border-left: 4px solid #2563eb;
+    padding-left: 12px;
+    line-height: 1.45;
+  }
+  h3 {
+    font-size: 17px;
+    margin-top: 30px;
+    color: #111;
+  }
+  h4 {
+    font-size: 15px;
+    margin-top: 20px;
+    color: #374151;
+  }
+  p { margin: 12px 0; }
+  code {
+    background: #f4f4f5;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: "SF Mono", Monaco, Consolas, "Courier New", monospace;
+    font-size: 13.5px;
+    color: #be185d;
+  }
+  pre {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 14px 18px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  pre code {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+  }
+  table {
+    border-collapse: collapse;
+    margin: 18px 0;
+    width: 100%;
+    font-size: 14px;
+  }
+  th, td {
+    border: 1px solid #d4d4d8;
+    padding: 8px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: #f4f4f5; font-weight: 600; }
+  blockquote {
+    border-left: 4px solid #fbbf24;
+    background: #fffbeb;
+    margin: 18px 0;
+    padding: 12px 18px;
+    color: #78350f;
+  }
+  blockquote.tip {
+    border-left-color: #2563eb;
+    background: #eff6ff;
+    color: #1e3a8a;
+  }
+  blockquote.warn {
+    border-left-color: #ef4444;
+    background: #fef2f2;
+    color: #7f1d1d;
+  }
+  .figure { margin: 28px 0; text-align: center; }
+  .figure-caption {
+    font-size: 13px;
+    color: #6b7280;
+    margin-top: 8px;
+    font-style: italic;
+  }
+  ul, ol { padding-left: 26px; }
+  li { margin: 6px 0; }
+  hr { border: none; border-top: 1px solid #e5e7eb; margin: 36px 0; }
+  .stub-tag {
+    display: inline-block;
+    background: #fef3c7;
+    color: #92400e;
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    margin-left: 6px;
+    font-weight: 600;
+  }
+  .punchline {
+    background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+    border-left: 5px solid #d97706;
+    padding: 16px 20px;
+    margin: 24px 0;
+    font-size: 17px;
+    line-height: 1.7;
+    border-radius: 4px;
+  }
+  .step-num {
+    display: inline-block;
+    width: 26px;
+    height: 26px;
+    background: #2563eb;
+    color: #fff;
+    border-radius: 50%;
+    text-align: center;
+    line-height: 26px;
+    font-weight: 700;
+    font-size: 14px;
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+</style>
+</head>
+<body>
+
+<h1>Claude Code 上下文管理拆解：朴素 agent loop 撑不到 30 轮，CC 在 LLM 调用前藏了 5 道关</h1>
+
+<p>讲 agent 设计的入门文章常常给出一个"agent loop"——其实就是十几行伪代码。看起来人人都能写一个。</p>
+
+<p>但真去用它跑一个稍微长点的任务（比如让模型读 10 个文件、改 5 处代码、再写测试），你会发现这个朴素 loop <strong>撑不到 30 轮就把上下文塞爆</strong>。模型会吐 <code>prompt-too-long</code>，或者更糟——勉强不报错，但 prompt cache 完全失效、每轮重写 30 万 token。</p>
+
+<p>Claude Code 没有重写 agent loop 的形状，它在 <strong>每次 LLM 调用之前</strong>插了 <strong>5 道关</strong>，专门解决"上下文越用越胀"的问题。本文要做的就是：</p>
+
+<ol>
+  <li>先用伪代码把朴素 agent loop 写出来，看它的死法；</li>
+  <li>再看 CC 在朴素 loop 里偷偷加了哪 5 道关；</li>
+  <li>5 道关一个个展开——它们粒度从细到粗、代价从轻到重，每一道都为了让"轻量手段先解决问题，重型手段是最后兜底"。</li>
+</ol>
+
+<hr>
+
+<h2>一、最朴素的 agent loop，和它必死的方式</h2>
+
+<p>把"用工具的对话型 agent"剥到只剩主干，逻辑大概长这样：</p>
+
+<pre><code>const messages = []
+const systemPrompt = "You are a helpful agent..."
+const tools = [Read, Write, Bash, ...]
+
+while (true) {
+  // 1. 拿一条新输入
+  const userInput = await getUserInput()
+  messages.push({ role: 'user', content: userInput })
+
+  // 2. 内层循环：让模型自由用工具，直到它不再 tool_use
+  while (true) {
+    const response = await llm.call({ systemPrompt, messages, tools })
+    messages.push(response)
+
+    if (response.toolCalls.length === 0) break
+
+    // 3. 执行工具，把结果作为下一条 user 消息
+    for (const tc of response.toolCalls) {
+      const result = await executeTool(tc)
+      messages.push({
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: tc.id, content: result }],
+      })
+    }
+  }
+}</code></pre>
+
+<p>这个 loop 没问题——逻辑是对的、能跑——但它有一个致命的<strong>不变量</strong>：<code>messages</code> 数组只增不减。每轮 LLM 调用都把 <em>所有历史</em> 重新发一遍。</p>
+
+<h3>为什么撑不到 30 轮</h3>
+
+<p>真实任务里 <code>tool_result</code> 是上下文增长的主力：</p>
+
+<ul>
+  <li>读一个 1000 行的源文件 → 30K tokens</li>
+  <li>跑一个 <code>grep</code>，命中 50 处 → 5K~10K tokens</li>
+  <li>看一份 build 日志 → 20K~50K tokens</li>
+  <li>查一个 npm 包文档 → 10K+ tokens</li>
+</ul>
+
+<p>20~30 轮工具调用之后，<code>messages</code> 数组里堆了几十万 token——大部分是<strong>已经看过、不会再看的旧 tool_result</strong>。但朴素 loop 把它们一字不落地塞回去，于是：</p>
+
+<ol>
+  <li><strong>硬上限</strong>：API 直接报 <code>prompt-too-long</code>，任务死掉；</li>
+  <li><strong>软退化</strong>：还没炸但已经接近上限，每轮处理几十万 token，成本和延迟都明显恶化，更糟的是<strong>模型注意力涣散</strong>——重要的近期信息被淹没在大段陈旧 tool_result 里，回答质量肉眼可见地下降。</li>
+</ol>
+
+<blockquote class="warn"><strong>所以问题的本质不是"上下文太大"，而是"上下文里大部分是无用的历史"。</strong>解药不是无限扩窗（贵且慢），而是<strong>有针对性地砍掉确定无用的部分</strong>。</blockquote>
+
+<h3>但"砍"也不能乱砍——prompt cache 的硬约束</h3>
+
+<p>设计任何上下文压缩方案，都要随时记住一个事实：<strong>Anthropic 的 prompt cache 是 prefix hash 命中</strong>。从 messages 开头到某个位置的内容只要有一个字节变化，从那个位置往前的整段缓存就全部作废，下一轮要重新写入 cache（写入价是读取价的几倍）。</p>
+
+<p>这给"砍历史"带来一个反直觉的约束：</p>
+
+<ul>
+  <li><strong>砍末尾几乎免费</strong>——前缀仍然命中。</li>
+  <li><strong>砍中段或前段则灾难</strong>——前缀变了，从砍点往后到末尾的所有缓存全部失效。</li>
+  <li>就算只是把"已发过的旧 tool_result"原地改成"占位符"，<strong>同样会破坏 cache</strong>。</li>
+</ul>
+
+<p>这个约束直接塑造了 CC 这 5 道关的形态——你会在后面反复看到这些设计动作：</p>
+
+<ul>
+  <li><strong>第 1 道</strong>把 tool_result 划成 <code>mustReapply / frozen / fresh</code> 三类，<strong>frozen 永远不许动</strong>，就是怕动了破坏 prefix；</li>
+  <li><strong>第 3 道</strong>的"热路径"干脆不改本地 messages，而是发 <code>cache_edits</code> 让服务端在缓存层删，绕过 prefix 改写；</li>
+  <li><strong>第 4 道</strong>用 <code>projectView()</code> 投影代替插入新消息，避免动 messages 数组；</li>
+  <li><strong>第 5 道</strong>"完整 compact"会彻底改写历史——这就是为什么它是<em>最后</em>的兜底，因为它必然废掉整段 cache。</li>
+</ul>
+
+<p>读完这一节，你已经能理解 5 道关排序的另一层动机：<strong>能保 cache 就保 cache，必须破坏 cache 的方案放最后</strong>。</p>
+
+<hr>
+
+<h2>二、CC 的解法：在 LLM 调用前藏了 5 道关</h2>
+
+<p>把 CC 的 <code>query.ts</code> 内层循环拍扁成伪代码，跟朴素版逐行对比：</p>
+
+<pre><code>while (true) {
+  // ↓↓↓ 朴素 loop 这里直接 llm.call(messages)
+  // ↓↓↓ CC 在这之前藏了 5 道关 ↓↓↓
+  let messagesForAPI = messages
+  messagesForAPI = applyToolResultBudget(messagesForAPI)        // ① 工具结果预算
+  messagesForAPI = snipCompactIfNeeded(messagesForAPI)          // ② 段落删除
+  messagesForAPI = await microcompactMessages(messagesForAPI)   // ③ 旧 tool_result 清理
+  messagesForAPI = await contextCollapseIfNeeded(messagesForAPI)// ④ 分段归档
+  messagesForAPI = await autocompactIfNeeded(messagesForAPI)    // ⑤ 重型兜底
+  // ↑↑↑ 5 道关之后才发给 LLM ↑↑↑
+
+  const response = await llm.call({ systemPrompt, messages: messagesForAPI, tools })
+  messages.push(response)
+
+  if (response.toolCalls.length === 0) break
+  for (const tc of response.toolCalls) { /* 同上 */ }
+}</code></pre>
+
+<p>注意一个关键事实：<strong>5 道关都只改 <code>messagesForAPI</code>，不改 <code>messages</code> 本身</strong>。<code>messages</code>（更准确说是写进 JSONL 的事件流）是<strong>持久真相</strong>，永远不动；<code>messagesForAPI</code> 是<strong>本轮发给 LLM 的视图</strong>，随便剪。这与上一篇<a href="#" target="_blank">《session 存储拆解》</a>里"harness 工作内存 vs 持久档案"的边界一致。</p>
+
+<div class="figure">
+<svg width="820" height="500" viewBox="0 0 820 500" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .ttlf { font: bold 14px -apple-system, sans-serif; fill: #111; }
+    .lblf { font: 12px -apple-system, sans-serif; fill: #1f2328; }
+    .smf { font: 11px -apple-system, sans-serif; fill: #6b7280; }
+    .stepnum { font: bold 13px -apple-system, sans-serif; fill: #fff; }
+  </style>
+  <defs>
+    <marker id="arrf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <text x="410" y="24" text-anchor="middle" class="ttlf" font-size="15">5 道关：粒度从细到粗、代价从轻到重</text>
+
+  <!-- input: messages -->
+  <rect x="30" y="60" width="150" height="60" fill="#dbeafe" stroke="#2563eb" stroke-width="2" rx="6"/>
+  <text x="105" y="86" text-anchor="middle" class="ttlf" fill="#1e40af">messages</text>
+  <text x="105" y="104" text-anchor="middle" class="smf">完整事件流（运行时内存）</text>
+
+  <!-- arrow into step 1 -->
+  <path d="M 180 90 L 196 90" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrf)"/>
+
+  <!-- step 1 -->
+  <rect x="200" y="55" width="140" height="78" fill="#fef3c7" stroke="#d97706" stroke-width="1.5" rx="5"/>
+  <circle cx="220" cy="76" r="11" fill="#2563eb"/>
+  <text x="220" y="80" text-anchor="middle" class="stepnum">1</text>
+  <text x="270" y="80" text-anchor="middle" class="ttlf" font-size="12">apply</text>
+  <text x="270" y="96" text-anchor="middle" class="ttlf" font-size="12">ToolResultBudget</text>
+  <text x="270" y="115" text-anchor="middle" class="smf" font-size="10">单条 · 不调 LLM</text>
+  <text x="270" y="128" text-anchor="middle" class="smf" font-size="10">替换为占位</text>
+
+  <path d="M 340 90 L 356 90" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrf)"/>
+
+  <!-- step 2 -->
+  <rect x="360" y="55" width="140" height="78" fill="#fef3c7" stroke="#d97706" stroke-width="1.5" rx="5"/>
+  <circle cx="380" cy="76" r="11" fill="#2563eb"/>
+  <text x="380" y="80" text-anchor="middle" class="stepnum">2</text>
+  <text x="430" y="80" text-anchor="middle" class="ttlf" font-size="12">snipCompact</text>
+  <text x="430" y="96" text-anchor="middle" class="ttlf" font-size="12">IfNeeded</text>
+  <text x="430" y="115" text-anchor="middle" class="smf" font-size="10">区段 · 模型决策</text>
+  <text x="430" y="128" text-anchor="middle" class="smf" font-size="10">删除中段消息</text>
+
+  <path d="M 500 90 L 516 90" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrf)"/>
+
+  <!-- step 3 -->
+  <rect x="520" y="55" width="140" height="78" fill="#fef3c7" stroke="#d97706" stroke-width="1.5" rx="5"/>
+  <circle cx="540" cy="76" r="11" fill="#2563eb"/>
+  <text x="540" y="80" text-anchor="middle" class="stepnum">3</text>
+  <text x="590" y="80" text-anchor="middle" class="ttlf" font-size="12">microcompact</text>
+  <text x="590" y="96" text-anchor="middle" class="ttlf" font-size="12">Messages</text>
+  <text x="590" y="115" text-anchor="middle" class="smf" font-size="10">tool_result · 不调 LLM</text>
+  <text x="590" y="128" text-anchor="middle" class="smf" font-size="10">清空 / cache_edits</text>
+
+  <path d="M 660 90 L 676 90" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrf)"/>
+
+  <!-- step 4 -->
+  <rect x="680" y="55" width="120" height="78" fill="#fef3c7" stroke="#d97706" stroke-width="1.5" rx="5"/>
+  <circle cx="698" cy="76" r="11" fill="#2563eb"/>
+  <text x="698" y="80" text-anchor="middle" class="stepnum">4</text>
+  <text x="746" y="80" text-anchor="middle" class="ttlf" font-size="12">context</text>
+  <text x="746" y="96" text-anchor="middle" class="ttlf" font-size="12">Collapse</text>
+  <text x="746" y="115" text-anchor="middle" class="smf" font-size="10">分段 · 后台小模型</text>
+  <text x="746" y="128" text-anchor="middle" class="smf" font-size="10">投影占位符</text>
+
+  <!-- arrow from step 4 down to step 5 -->
+  <path d="M 740 133 L 740 175 L 555 175 L 555 195" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrf)"/>
+  <text x="745" y="150" class="smf" font-size="10">前 4 道都没救住</text>
+
+  <!-- step 5 -->
+  <rect x="430" y="200" width="250" height="100" fill="#fee2e2" stroke="#dc2626" stroke-width="2" rx="6"/>
+  <circle cx="455" cy="226" r="13" fill="#dc2626"/>
+  <text x="455" y="231" text-anchor="middle" class="stepnum" font-size="14">5</text>
+  <text x="555" y="226" text-anchor="middle" class="ttlf" font-size="14" fill="#7f1d1d">autocompact</text>
+  <text x="555" y="244" text-anchor="middle" class="smf" font-size="11">两分支：</text>
+  <text x="555" y="260" text-anchor="middle" class="smf" font-size="11">· session-memory（不调 LLM）</text>
+  <text x="555" y="276" text-anchor="middle" class="smf" font-size="11">· 完整 compact（调 LLM 重写）</text>
+  <text x="555" y="292" text-anchor="middle" class="smf" font-size="10" fill="#7f1d1d">重型兜底 · 唯一会丢失原始消息粒度的一步</text>
+
+  <!-- arrow from step 5 down to messagesForAPI -->
+  <path d="M 430 250 L 200 250 L 200 350" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrf)"/>
+
+  <!-- messagesForAPI -->
+  <rect x="120" y="350" width="160" height="60" fill="#dcfce7" stroke="#16a34a" stroke-width="2" rx="6"/>
+  <text x="200" y="376" text-anchor="middle" class="ttlf" fill="#15803d">messagesForAPI</text>
+  <text x="200" y="394" text-anchor="middle" class="smf">本轮发给 LLM 的视图</text>
+
+  <!-- arrow to llm.call -->
+  <path d="M 280 380 L 320 380" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrf)"/>
+
+  <!-- llm.call -->
+  <rect x="320" y="350" width="160" height="60" fill="#e0e7ff" stroke="#4338ca" stroke-width="2" rx="6"/>
+  <text x="400" y="376" text-anchor="middle" class="ttlf" fill="#3730a3">llm.call(...)</text>
+  <text x="400" y="394" text-anchor="middle" class="smf">真正的模型调用</text>
+
+  <!-- key invariant note -->
+  <rect x="510" y="350" width="280" height="60" fill="#fffbeb" stroke="#f59e0b" stroke-dasharray="3 3" rx="4"/>
+  <text x="650" y="372" text-anchor="middle" class="ttlf" font-size="12" fill="#92400e">关键不变量</text>
+  <text x="650" y="388" text-anchor="middle" class="smf">5 道关只改 messagesForAPI</text>
+  <text x="650" y="402" text-anchor="middle" class="smf">不改 messages（持久档案）</text>
+
+  <!-- legend -->
+  <text x="30" y="445" class="smf">代价标注：</text>
+  <rect x="115" y="436" width="14" height="12" fill="#fef3c7" stroke="#d97706"/>
+  <text x="135" y="446" class="smf">轻量（删除/替换/投影）</text>
+  <rect x="295" y="436" width="14" height="12" fill="#fee2e2" stroke="#dc2626"/>
+  <text x="315" y="446" class="smf">重型（必要时调 LLM 摘要）</text>
+
+  <text x="30" y="470" class="smf">设计原则：能用前 4 步解决就不到第 5 步——前 4 步保留细粒度，第 5 步会丢失原始消息</text>
+  <text x="30" y="488" class="smf">链路位置：query.ts 内层循环 · LLM 调用前 · 调用点见 query.ts 内 5 个连续位置</text>
+</svg>
+<div class="figure-caption">图 1：5 道关排成漏斗，前 4 道是轻量手段（不调 LLM 或只调小模型），第 5 道是重型兜底。每一道都只动 messagesForAPI，不动 messages 本身。</div>
+</div>
+
+<p>把 5 道关并排放进一张表，作为后续展开的索引：</p>
+
+<table>
+<thead>
+<tr><th>步</th><th>名字</th><th>粒度</th><th>调 LLM？</th><th>公开 build 里能看到</th><th>解决什么问题</th></tr>
+</thead>
+<tbody>
+<tr><td>①</td><td><code>applyToolResultBudget</code></td><td>单条 tool_result</td><td>否</td><td>完整实现</td><td>单轮工具返回太大，把当前消息直接撑爆</td></tr>
+<tr><td>②</td><td><code>snipCompactIfNeeded</code></td><td>历史区段</td><td>否（模型决策）</td><td>仅接口签名 <span class="stub-tag">build 剥离</span></td><td>显然无用的旧历史段（debug 完成、结论得出）</td></tr>
+<tr><td>③</td><td><code>microcompactMessages</code></td><td>旧 tool_result</td><td>否</td><td>冷路径完整 / 热路径仅签名</td><td>累积的旧工具结果占大头</td></tr>
+<tr><td>④</td><td><code>contextCollapse</code></td><td>多个消息区段</td><td>后台小模型</td><td>仅接口签名 <span class="stub-tag">build 剥离</span></td><td>接近上下文上限，需要分段归档保留细粒度</td></tr>
+<tr><td>⑤</td><td><code>autocompact</code></td><td>整段历史</td><td>是（完整 compact 分支）</td><td>完整实现</td><td>前 4 道都没救住的重型兜底</td></tr>
+</tbody>
+</table>
+
+<blockquote class="tip"><strong>读完这张表已经能理解 80% 的设计：</strong>5 道关按"代价从轻到重"排列，前面能省事就不到后面。第 1、3 步连模型都不用调，靠规则和缓存就把大头砍了；第 2、4 步引入小模型做精细决策；只有第 5 步的"完整 compact"分支才会调主模型重写整段历史——而且会丢失原始消息粒度，所以是兜底中的兜底。</blockquote>
+
+<hr>
+
+<h2>三、第 1 道：<code>applyToolResultBudget</code> — 工具结果预算</h2>
+
+<p>解决的问题：<strong>单轮里若干并行 tool_use 同时返回，几条加起来就能撑爆当前 user message</strong>。这不是历史累积问题，是单轮就能炸的急性问题。</p>
+
+<h3>3.1 预算上限按"模型实际看到的 wire 体积"算</h3>
+
+<p>默认上限：<strong>每条 API-level user message 内所有 tool_result 加起来 ≤ 200K 字符</strong>（<code>MAX_TOOL_RESULTS_PER_MESSAGE_CHARS</code>，可由 GrowthBook flag <code>tengu_hawthorn_window</code> 覆盖）。</p>
+
+<p>注意"API-level user message"这个限定：本地状态里 N 条分散的 user 消息，经 <code>normalizeMessagesForAPI</code> 合并连续 user 后，<strong>在模型眼里可能只是一条</strong>。预算必须按合并后的体积算，否则 N 条各自"看似不超预算"的结果合并后会直接突破上限。</p>
+
+<h3>3.2 三类 tool_result：mustReapply / frozen / fresh</h3>
+
+<p>组内的 tool_result 被分成三类——<strong>这是这一道关最讲究的地方</strong>：</p>
+
+<div class="figure">
+<svg width="820" height="320" viewBox="0 0 820 320" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .ttlb { font: bold 14px -apple-system, sans-serif; fill: #111; }
+    .lblb { font: 13px -apple-system, sans-serif; fill: #1f2328; }
+    .smb { font: 11.5px -apple-system, sans-serif; fill: #6b7280; }
+  </style>
+  <defs>
+    <marker id="arrb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <text x="410" y="22" text-anchor="middle" class="ttlb" font-size="15">applyToolResultBudget 的三类划分</text>
+
+  <!-- mustReapply -->
+  <rect x="40" y="50" width="240" height="180" fill="#dcfce7" stroke="#16a34a" stroke-width="2" rx="6"/>
+  <text x="160" y="74" text-anchor="middle" class="ttlb" fill="#15803d">mustReapply</text>
+  <text x="160" y="92" text-anchor="middle" class="smb">已经被替换过的</text>
+  <rect x="60" y="106" width="200" height="22" fill="#bbf7d0" stroke="#22c55e" rx="2"/>
+  <text x="70" y="122" class="lblb" font-size="12">tool_use_id: tu-001</text>
+  <rect x="60" y="132" width="200" height="22" fill="#bbf7d0" stroke="#22c55e" rx="2"/>
+  <text x="70" y="148" class="lblb" font-size="12">tool_use_id: tu-005</text>
+  <text x="160" y="178" text-anchor="middle" class="smb" fill="#15803d">→ 直接复用缓存的</text>
+  <text x="160" y="194" text-anchor="middle" class="smb" fill="#15803d">replacement 字符串</text>
+  <text x="160" y="214" text-anchor="middle" class="smb" fill="#15803d" font-weight="bold">零 I/O · 字节级一致</text>
+
+  <!-- frozen -->
+  <rect x="290" y="50" width="240" height="180" fill="#e0e7ff" stroke="#4338ca" stroke-width="2" rx="6"/>
+  <text x="410" y="74" text-anchor="middle" class="ttlb" fill="#3730a3">frozen</text>
+  <text x="410" y="92" text-anchor="middle" class="smb">之前已看过但未替换的</text>
+  <rect x="310" y="106" width="200" height="22" fill="#c7d2fe" stroke="#6366f1" rx="2"/>
+  <text x="320" y="122" class="lblb" font-size="12">tool_use_id: tu-002</text>
+  <rect x="310" y="132" width="200" height="22" fill="#c7d2fe" stroke="#6366f1" rx="2"/>
+  <text x="320" y="148" class="lblb" font-size="12">tool_use_id: tu-003</text>
+  <text x="410" y="178" text-anchor="middle" class="smb" fill="#3730a3">→ 不能再动</text>
+  <text x="410" y="194" text-anchor="middle" class="smb" fill="#3730a3">否则破坏 prompt cache 前缀</text>
+  <text x="410" y="214" text-anchor="middle" class="smb" fill="#3730a3" font-weight="bold">原样保留</text>
+
+  <!-- fresh -->
+  <rect x="540" y="50" width="240" height="180" fill="#fef3c7" stroke="#d97706" stroke-width="2" rx="6"/>
+  <text x="660" y="74" text-anchor="middle" class="ttlb" fill="#92400e">fresh</text>
+  <text x="660" y="92" text-anchor="middle" class="smb">本轮新出现的</text>
+  <rect x="560" y="106" width="200" height="22" fill="#fde68a" stroke="#f59e0b" rx="2"/>
+  <text x="570" y="122" class="lblb" font-size="12">tu-006  size: 80K</text>
+  <rect x="560" y="132" width="200" height="22" fill="#fde68a" stroke="#f59e0b" rx="2"/>
+  <text x="570" y="148" class="lblb" font-size="12">tu-007  size: 60K</text>
+  <rect x="560" y="158" width="200" height="22" fill="#fde68a" stroke="#f59e0b" rx="2"/>
+  <text x="570" y="174" class="lblb" font-size="12">tu-008  size: 40K</text>
+  <text x="660" y="206" text-anchor="middle" class="smb" fill="#92400e" font-weight="bold">唯一可能被替换的候选</text>
+
+  <!-- algorithm -->
+  <rect x="40" y="252" width="740" height="50" fill="#f4f4f5" stroke="#71717a" stroke-dasharray="4 2" rx="4"/>
+  <text x="410" y="272" text-anchor="middle" class="ttlb" font-size="13">替换算法：fresh 按 size 从大到小排序，逐个替换，直到 frozenSize + remainingFreshSize ≤ 200K</text>
+  <text x="410" y="290" text-anchor="middle" class="smb">"挑最大的几个单独替换"，不是整组一起压。被替换的写入磁盘，文件名按 tool_use_id 命名（已有则跳过）</text>
+</svg>
+<div class="figure-caption">图 2：三类划分的设计动机是 prompt cache 前缀稳定。mustReapply 用同一份字符串，frozen 不许动，只有 fresh 可以挑大的替换。</div>
+</div>
+
+<h3>3.3 一个具体例子</h3>
+
+<p>一条 API user message 里有 5 个并行 tool_result，大小分别是 <strong>80K、80K、80K、10K、10K</strong>，总 260K：</p>
+
+<ul>
+  <li><code>frozenSize = 0</code>，<code>freshSize = 260K</code>，<code>limit = 200K</code> → 超预算。</li>
+  <li>fresh 排序后：80K、80K、80K、10K、10K。</li>
+  <li>替换第一个 80K：<code>remaining = 180K ≤ 200K</code>，停止。</li>
+  <li>实际只替换 <strong>1 个</strong> 80K 的结果；其余 4 个保留原样。</li>
+</ul>
+
+<p>另一个例子：5 个结果都是 60K，总 300K——替换第一个后 240K（仍超），替换第二个后 180K（停止）。最终替换 <strong>2 个</strong>。</p>
+
+<h3>3.4 替换后长什么样 + 为什么要写入磁盘</h3>
+
+<p>被选中的 tool_result 由 <code>persistToolResult</code> 写入磁盘（文件名按 <code>tool_use_id</code> 命名，已有则跳过），原内容替换成：</p>
+
+<pre><code>&lt;persisted-output&gt;
+Output too large (...). Full output saved to: /path/to/persisted/tu-006.txt
+Preview (first 2000 bytes):
+... 前 2000 字节预览 ...
+&lt;/persisted-output&gt;</code></pre>
+
+<p>这里有一个非常关键的设计：<strong>替换状态按 <code>tool_use_id</code> 持久化记忆</strong>。一旦某个 tool_result 被替换过，下次它再出现在 messages 里（同一个 session 后续轮次），就走 <code>mustReapply</code> 路径，<strong>用完全相同的 replacement 字符串</strong>。这意味着——</p>
+
+<blockquote class="tip"><strong>同一个 tool_result 在它出现的<em>所有</em>后续轮次里，要么都是原文、要么都是同一份替换。绝不会"这一轮替换、下一轮又变回去"或"两轮替换内容不同"。</strong>这是为了让 prompt cache 的 prefix hash 在跨轮次之间保持稳定——cache 是 prefix 命中，一字之差全废。</blockquote>
+
+<hr>
+
+<h2>四、第 2 道：<code>snipCompactIfNeeded</code> — 段落删除 <span class="stub-tag">公开 build 仅签名</span></h2>
+
+<p>解决的问题：<strong>有些旧历史段对当前任务<em>显然</em>无用了</strong>——比如用户排查 bug 已经得出结论、或者一段探索分支已经被放弃。autocompact 会把它们一并丢进总结，但其实直接删掉更好（不耗总结成本、保留细粒度）。</p>
+
+<blockquote class="warn"><strong>提醒：</strong>这个模块在公开 build 里只剩接口签名（<code>// Auto-generated stub</code>），不能从公开仓库直接跑出 snip 行为。但接口、调用点、resume 恢复逻辑、context_efficiency 附件里的注释（讲 nudge 节奏）、消息上的 <code>[id:xxxxxx]</code> 短 ID 标签等多重线索拼起来，设计意图非常清楚——下面讲的就是从这些线索逆推出的最可能算法。</blockquote>
+
+<h3>4.1 触发节奏：nudge 模型，不是硬阈值</h3>
+
+<p>不是"超过 X token 立即 snip"，而是<strong>给模型发提示（nudge）</strong>。<code>shouldNudgeForSnips</code> 用 10K token 的间隔节奏触发提示——但提示之后仍要由模型决定该不该 snip、snip 哪段。</p>
+
+<p>这个间隔在 <em>之前的提示</em>、<em>已有的 snip 标记</em>、<em>snip 边界</em>、<em>compact 边界</em>之后都会重置。整体是"上下文变重时鼓励模型做这件事"，而不是机器自动执行。</p>
+
+<h3>4.2 两阶段执行：标记（marker）→ 边界（boundary）</h3>
+
+<ul>
+  <li><strong>标记</strong>：内部登记标记，由 <code>SnipTool</code> 或 <code>/force-snip</code> 入口写入"哪段历史可裁剪"。</li>
+  <li><strong>边界</strong>：在每轮 query 前，<code>snipCompactIfNeeded()</code> 把标记真正落地——删掉中段消息、记录 <code>removedUuids</code>、修复幸存消息的 <code>parentUuid</code> 链。</li>
+</ul>
+
+<h3>4.3 SnipTool 的输入形态</h3>
+
+<p>当 <code>HISTORY_SNIP</code> 真正运行时，系统会给发往模型的 user message 末尾追加 <code>[id:xxxxxx]</code> 短 ID 标签（注释明确写"for snip tool referencing"）。从这个线索倒推，SnipTool 最可能的输入：</p>
+
+<pre><code>{
+  spans: [
+    {
+      start_id: "a1b2c3",   // 区段起点（某条 user message 末尾的短 ID）
+      end_id:   "d4e5f6",   // 区段终点（另一条 user message 末尾的短 ID）
+      reason:   "这段排查已得出结论，后续不需要保留完整原始过程"
+    }
+  ]
+}</code></pre>
+
+<p>注意 <code>start_id / end_id</code> 都对应 <strong>user message</strong> 的短 ID——意思是"从某个用户回合开始，到另一个用户回合结束"，中间夹着的 assistant / tool_use / tool_result 一起算进 snip 区间。</p>
+
+<h3>4.4 删除的视图策略：API 砍、UI 留</h3>
+
+<p>执行后并不一定把原始消息从界面层抹掉：</p>
+
+<ul>
+  <li><strong>REPL</strong>：保留全量 transcript，方便用户向上滚动查看历史；</li>
+  <li><strong>API 视图</strong>：通过 <code>projectSnippedView()</code> 投影掉被 snip 的消息，模型看不到；</li>
+  <li><strong>JSONL</strong>：原始消息物理保留，<code>removedUuids</code> 写到 snip boundary 元数据；resume 时按记录重放删除（这与上一篇里"compact 不删 JSONL"的原则一致）。</li>
+</ul>
+
+<p>函数返回 <code>tokensFreed</code>，给后面的 autocompact 做阈值修正——避免 autocompact 拿着 stale usage 误判触发。</p>
+
+<hr>
+
+<h2>五、第 3 道：<code>microcompactMessages</code> — 旧 tool_result 清理</h2>
+
+<p>解决的问题：<strong>哪怕没炸单轮预算、也没显然该删的段，长会话里仍然累积了大量旧 tool_result</strong>。微压缩专门处理这部分。</p>
+
+<h3>5.1 只动 <code>COMPACTABLE_TOOLS</code> 内的工具</h3>
+
+<p>不是所有 tool_result 都被压。<code>COMPACTABLE_TOOLS</code> 是一个白名单，里面是适合压缩的工具（典型如 Bash 输出、grep 结果）；像 Read 这种<strong>用户可能反复回看的</strong>工具结果不在白名单里，永远保留原文。</p>
+
+<h3>5.2 冷路径：60 分钟 idle 后清空</h3>
+
+<p>判定条件：距离上一条 assistant 消息超过 60 分钟。这时认为服务端 cache 基本过期了，怎么改都不亏。<strong>直接把较老的 tool_result 内容清空</strong>成：</p>
+
+<pre><code>[Old tool result content cleared]</code></pre>
+
+<p>只保留<strong>最近 5 条</strong>。这条路径完整实现、生效中。</p>
+
+<h3>5.3 热路径：cache_edits 服务端删除 <span class="stub-tag">公开 build 仅签名</span></h3>
+
+<p>当 cache 还热（距上次 assistant 不久）+ 模型支持 cache editing + 主线程（非子 agent）时，走另一条路：<strong>不动本地 messages</strong>，而是给请求附加 <code>cache_edits</code> 指令，让服务端在缓存前缀里直接删掉旧 tool_result。</p>
+
+<p>这条路径的好处是<strong>本地 messages 完全不动、prompt cache 命中保住</strong>——你删的不是"要发的内容"，是"已缓存前缀里的部分"。</p>
+
+<p>触发条件是<strong>计数</strong>：每轮 query 前扫描完整对话历史，把还没登记过的 compactable tool_result 注册进 <code>cachedMCState</code>（<code>toolOrder</code> 记录顺序、<code>deletedRefs</code> 记录已删的）。当——</p>
+
+<pre><code>活跃数 = toolOrder.length - deletedRefs.size
+活跃数 &gt; triggerThreshold ?
+  ├─ 是：生成 cache_edits，从最老的批量删，保留最近 keepRecent 条
+  └─ 否：什么都不做</code></pre>
+
+<p><code>triggerThreshold</code> 和 <code>keepRecent</code> 来自 GrowthBook 远程配置。系统提示语会提前告知模型"<strong>The N most recent results are always kept</strong>"，让模型对"老结果可能消失"有心理准备。</p>
+
+<h3>5.4 冷热双路径的设计直觉</h3>
+
+<table>
+<thead><tr><th></th><th>冷路径</th><th>热路径</th></tr></thead>
+<tbody>
+<tr><td>判定</td><td>idle &gt; 60min</td><td>cache 热 + 支持 edits + 主线程</td></tr>
+<tr><td>动作</td><td>本地 messages 改成占位符</td><td>本地不动，发 cache_edits 给服务端</td></tr>
+<tr><td>cache 影响</td><td>反正过期了，不在乎</td><td>必须保住命中</td></tr>
+<tr><td>公开 build</td><td>完整实现</td><td>仅签名（剥离）</td></tr>
+</tbody>
+</table>
+
+<p>一句话理解：<strong>cache 已废就直接改本地、cache 还热就让服务端帮删</strong>。两条路径目标都是"砍掉旧 tool_result"，但优化的对象不一样。</p>
+
+<hr>
+
+<h2>六、第 4 道：<code>contextCollapse</code> — 分段归档 <span class="stub-tag">公开 build 仅签名</span></h2>
+
+<p>解决的问题：<strong>接近上下文上限时，autocompact 会粗暴地把整段历史压成一个总摘要——粒度太粗</strong>。Context Collapse 想做的是"按多个 span 分段归档"，让最近上下文继续保持原始消息粒度。</p>
+
+<h3>6.1 触发线：90% commit-start / 95% blocking-spawn</h3>
+
+<p>注释里明确写到：collapse 模式下<strong>由 90% 启动后台 commit、95% 阻塞式生成</strong>来管理 headroom。一旦 <code>isContextCollapseEnabled()</code> 为真，会<strong>抑制主动式 autocompact</strong>——意思是"collapse 接管，autocompact 别抢"。</p>
+
+<h3>6.2 lifecycle：staged → committed</h3>
+
+<p>类型定义里有两套状态：</p>
+
+<ul>
+  <li><strong>stagedSpans</strong>：已识别为可折叠的消息区段，但尚未生成摘要。<code>{ startUuid, endUuid, summary, risk, stagedAt }</code></li>
+  <li><strong>collapsedSpans / collapsedMessages</strong>：已经由后台代理（ctx-agent）总结、提交的折叠记录</li>
+</ul>
+
+<p>设计上是<strong>异步两阶段</strong>：</p>
+
+<ol>
+  <li>主线程发现"这段历史可以折叠"，扔进 stagedSpans 排队，不阻塞当前 query</li>
+  <li>后台启动 ctx-agent 拉总结，成功后提交为 collapsed span</li>
+</ol>
+
+<h3>6.3 读取时是<em>投影</em>不是<em>插消息</em></h3>
+
+<p>这是 collapse 和 autocompact 最大的区别。autocompact 是把摘要消息<strong>插进 messages 链</strong>；collapse 不动 messages 链，<strong>读取时通过 <code>projectView()</code> 投影</strong>——把 <code>firstArchivedUuid..lastArchivedUuid</code> 区段在视图里替换成 <code>&lt;collapsed id="...">summary&lt;/collapsed&gt;</code> 占位符。</p>
+
+<p>这种"投影式"压缩的好处：跨 turn 持续生效，且不打破 messages 数组本身的结构。<code>ContextCollapseCommitEntry</code> 持久化的也只是"摘要占位符 + 拼接指令"，原始消息已在 transcript 里，不重复存。</p>
+
+<h3>6.4 强制排空（drain）：413 错误时的兜底</h3>
+
+<p>错误恢复链里，<code>prompt-too-long</code> 不立即触发响应式压缩，而是先走 <code>recoverFromOverflow()</code>——<strong>把所有 staged 的 collapse 区段强制排空</strong>（赶紧总结、立刻 collapse），用新视图重试。只有这条路也失败，才退化到 reactive autocompact。</p>
+
+<blockquote class="tip"><strong>设计目标是保留细粒度上下文，避免退化成整段摘要。</strong>把 collapse 想成 "soft compact"——按段折叠，最近上下文留原文；只有 collapse 也救不了的时候，才让 autocompact 出手做"hard compact"。</blockquote>
+
+<hr>
+
+<h2>七、第 5 道：<code>autocompact</code> — 重型兜底</h2>
+
+<p>解决的问题：<strong>前 4 道关都没把上下文压到阈值下</strong>。autocompact 用当前 <code>messagesForQuery</code> 估算 token，减去 snip 释放的 <code>tokensFreed</code>，仍然超阈值就触发。</p>
+
+<p>autocompact 自己分两条分支——能不调 LLM 就不调：</p>
+
+<div class="figure">
+<svg width="820" height="380" viewBox="0 0 820 380" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .ttla { font: bold 14px -apple-system, sans-serif; fill: #111; }
+    .lbla { font: 13px -apple-system, sans-serif; fill: #1f2328; }
+    .sma { font: 11.5px -apple-system, sans-serif; fill: #6b7280; }
+  </style>
+  <defs>
+    <marker id="arra" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <text x="410" y="22" text-anchor="middle" class="ttla" font-size="15">autocompact 两条分支：能省 LLM 就省 LLM</text>
+
+  <!-- entry -->
+  <rect x="320" y="50" width="180" height="50" fill="#fee2e2" stroke="#dc2626" stroke-width="2" rx="6"/>
+  <text x="410" y="72" text-anchor="middle" class="ttla" fill="#7f1d1d">autocompact 触发</text>
+  <text x="410" y="90" text-anchor="middle" class="sma">前 4 道关之后仍超阈值</text>
+
+  <path d="M 410 100 L 410 130" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arra)"/>
+
+  <!-- decision -->
+  <polygon points="410,140 530,180 410,220 290,180" fill="#fef9c3" stroke="#eab308" stroke-width="2"/>
+  <text x="410" y="178" text-anchor="middle" class="ttla" font-size="12">trySessionMemoryCompaction()</text>
+  <text x="410" y="194" text-anchor="middle" class="sma">SessionMemory 文件可用？</text>
+
+  <!-- branch A: session-memory -->
+  <path d="M 290 180 L 200 180 L 200 250" stroke="#16a34a" stroke-width="1.5" fill="none" marker-end="url(#arra)"/>
+  <text x="245" y="172" class="lbla" fill="#15803d">是</text>
+
+  <rect x="60" y="250" width="280" height="100" fill="#dcfce7" stroke="#16a34a" stroke-width="2" rx="6"/>
+  <text x="200" y="272" text-anchor="middle" class="ttla" fill="#15803d">session-memory compact</text>
+  <text x="200" y="290" text-anchor="middle" class="sma" fill="#15803d" font-weight="bold">不调 LLM</text>
+  <text x="200" y="308" text-anchor="middle" class="sma">直接读 SessionMemory 文件</text>
+  <text x="200" y="324" text-anchor="middle" class="sma">+ 保留一段最近原始消息尾巴</text>
+  <text x="200" y="340" text-anchor="middle" class="sma">（≥10K tokens / ≥5 条文本消息）</text>
+
+  <!-- branch B: full compact -->
+  <path d="M 530 180 L 620 180 L 620 250" stroke="#dc2626" stroke-width="1.5" fill="none" marker-end="url(#arra)"/>
+  <text x="565" y="172" class="lbla" fill="#7f1d1d">否 / 失败</text>
+
+  <rect x="480" y="250" width="280" height="100" fill="#fee2e2" stroke="#dc2626" stroke-width="2" rx="6"/>
+  <text x="620" y="272" text-anchor="middle" class="ttla" fill="#7f1d1d">完整 compact</text>
+  <text x="620" y="290" text-anchor="middle" class="sma" fill="#7f1d1d" font-weight="bold">调 LLM 现场总结</text>
+  <text x="620" y="308" text-anchor="middle" class="sma">9 段结构化输出</text>
+  <text x="620" y="324" text-anchor="middle" class="sma">不保留原始尾巴</text>
+  <text x="620" y="340" text-anchor="middle" class="sma">原始 messages 整段被替代</text>
+</svg>
+<div class="figure-caption">图 3：autocompact 优先走 session-memory（免费的、靠后台维护好的总结文件）；失败才走完整 compact（调 LLM 现场重写一段总结）。</div>
+</div>
+
+<h3>7.1 分支 A：session-memory compact（不调 LLM）</h3>
+
+<p>关键洞察：<strong>session-memory 文件不是 compact 时现场生成的，而是会话过程中由 post-sampling hook 在后台持续维护的</strong>一份 markdown 记忆文件。compact 触发时直接读这份文件即可，不需要重跑 LLM。</p>
+
+<p>compact 后真正发给 LLM 的 messages 大致是：</p>
+
+<pre><code>0. user (isMeta=true)         // userContext reminder
+   &lt;system-reminder&gt;CLAUDE.md + currentDate&lt;/system-reminder&gt;
+
+1. user (isCompactSummary=true)
+   "This session is being continued from a previous conversation that ran out
+   of context. The summary below covers the earlier portion of the conversation.
+
+   # Current State
+   - 用户当前在看 query.ts 的上下文压缩链路
+   - 已确认 applyToolResultBudget / microcompact / autocompact 的职责
+
+   # Important Findings
+   ...
+
+   # Next Step
+   - 继续理解完整 compact 的 prompt 和产物
+
+   If you need specific details from before compaction, read the full transcript at:
+   /path/to/session.jsonl
+
+   Recent messages are preserved verbatim."
+
+2-N. assistant/user/...        // messagesToKeep 中的原始消息（一段最近尾巴）
+N+1. user (isMeta=true)        // 由 attachments / hookResults 归一化而来</code></pre>
+
+<p>"最近尾巴"<strong>不是固定几条消息</strong>，而是一段足以继续工作的尾部上下文：默认要求 ≥10K tokens、≥5 条带文本的消息，尽量控制在 40K tokens 内，且<strong>不能拆开 tool_use/tool_result 配对</strong>。</p>
+
+<h3>7.2 分支 B：完整 compact（调 LLM）</h3>
+
+<p>session-memory 不可用、为空、或压完仍超阈值时，回退到 <code>compactConversation()</code>。这条路径会把整段历史发给 <strong>总结模型</strong>（不是主对话模型），加一个特定 prompt——</p>
+
+<pre><code>[messages parameter]
+0. user/assistant/...       // 原来的整段历史消息
+
+N. user message             // summaryRequest（追加在末尾）
+   content: NO_TOOLS_PREAMBLE
+          + BASE_COMPACT_PROMPT
+          + optional customInstructions
+          + NO_TOOLS_TRAILER</code></pre>
+
+<p>"禁止调用工具、只能返回纯文本总结"是这条 user message 文本的一部分，不是单独消息。</p>
+
+<p>模型返回一份 9 段结构化总结：</p>
+
+<pre><code>Summary:
+1. Primary Request and Intent:        ← 用户在做什么、目标是什么
+2. Key Technical Concepts:            ← 涉及的关键技术词
+3. Files and Code Sections:           ← 看过/改过的文件清单
+4. Errors and fixes:                  ← 期间踩过的坑和解法
+5. Problem Solving:                   ← 整体推理路径
+6. All user messages:                 ← 用户提过的所有指令
+7. Pending Tasks:                     ← 待办
+8. Current Work:                      ← 当前在做什么
+9. Optional Next Step:                ← 下一步建议</code></pre>
+
+<p>这 9 段不是随手列的——它对应 agent 任务里"要继续往下走必须知道的所有事"。代码从模型回复里提取 <code>summary</code> 文本（剥掉 <code>&lt;analysis&gt;</code> 包装），用 <code>getCompactUserSummaryMessage()</code> 包成 compact summary message。</p>
+
+<h3>7.3 完整 compact 后的 messages 结构</h3>
+
+<pre><code>0. user (isMeta=true)         // userContext reminder
+
+1. user (isCompactSummary=true)
+   content: "...Summary: 1. Primary Request... 2. Key Technical Concepts... ..."
+
+2. user(s) (isMeta=true)      // attachments：最近读过的文件（最多 5 个）
+                              // + plan file / invoked skills / MCP instructions / agent status
+
+3. user(s) (isMeta=true)      // hookResults：SessionStart hook additional context</code></pre>
+
+<p>注意几个细节：</p>
+
+<ul>
+  <li><strong>没有"原始尾巴"</strong>——这是和 session-memory compact 最大的区别。原始历史<em>整段</em>被 compact summary 替代，模型只能看到摘要 + 通过 attachments 补回的少量运行态上下文。</li>
+  <li><strong>"最近读过的文件内容"会被重新读一次</strong>：默认最多 5 个，受单文件和总 token budget 限制。这是为了让模型在压缩后还能"摸到"代码当下的状态。</li>
+  <li><strong>invoked skills 只在完整 compact 路径补</strong>，session-memory 路径不补。</li>
+</ul>
+
+<h3>7.4 为什么有两条分支</h3>
+
+<p>这是整篇文章的一个点睛：<strong>同一道关里再分"轻"和"重"</strong>。</p>
+
+<table>
+<thead><tr><th></th><th>session-memory</th><th>完整 compact</th></tr></thead>
+<tbody>
+<tr><td>调 LLM？</td><td>否（读文件）</td><td>是（现场总结）</td></tr>
+<tr><td>原始尾巴</td><td>保留 ≥10K tokens / ≥5 条</td><td>没有，整段被替代</td></tr>
+<tr><td>触发场景</td><td>SessionMemory 文件已就绪</td><td>session-memory 不可用 / 失败</td></tr>
+<tr><td>代价</td><td>~0（一次磁盘读）</td><td>跑一次完整总结请求</td></tr>
+</tbody>
+</table>
+
+<p>能用文件就用文件，是因为<strong>SessionMemory 在会话期间已经由后台 hook 在维护</strong>——这份维护本来就要做（用于其他场景），compact 只是顺手用一下。这是典型的"已有的工作要榨干"思维。</p>
+
+<hr>
+
+<h2>八、5 道关串起来的设计哲学</h2>
+
+<p>把 5 道关重新排一遍，会发现它们沿三条轴递进：</p>
+
+<table>
+<thead><tr><th>轴</th><th>① ToolResultBudget</th><th>② Snip</th><th>③ Microcompact</th><th>④ Collapse</th><th>⑤ Autocompact</th></tr></thead>
+<tbody>
+<tr><td><strong>粒度</strong></td><td>单条 tool_result</td><td>历史区段</td><td>旧 tool_result</td><td>多个 span</td><td>整段历史</td></tr>
+<tr><td><strong>动作</strong></td><td>替换为占位字符串</td><td>删除</td><td>清空 / 服务端删</td><td>分段总结+投影</td><td>整段总结</td></tr>
+<tr><td><strong>调 LLM</strong></td><td>否</td><td>否（模型决策）</td><td>否</td><td>后台小模型</td><td>是（完整分支）</td></tr>
+<tr><td><strong>是否丢失原始</strong></td><td>否（写盘可恢复）</td><td>否（JSONL 保留）</td><td>否（占位符）</td><td>否（投影）</td><td><strong>是</strong></td></tr>
+</tbody>
+</table>
+
+<p>三条规律一目了然：</p>
+
+<ol>
+  <li><strong>越靠后代价越高</strong>：从规则替换 → 模型决策 → 后台小模型 → 主模型重写。前 4 道都不调主模型。</li>
+  <li><strong>越靠前粒度越细</strong>：单条 → 区段 → 类型 → 多 span → 整段。粗粒度只在前面无效时才用。</li>
+  <li><strong>只有第 5 道"完整 compact"会丢失原始消息粒度</strong>。前 4 道都做到了"压而不毁"——要么替换可还原（写盘）、要么删除有记录（removedUuids）、要么投影不动数据（projectView）、要么占位符可展开（&lt;collapsed&gt;）。</li>
+</ol>
+
+<p>这三条规律一起构成 CC 上下文管理的核心设计：</p>
+
+<div class="punchline">
+<strong>能不调 LLM 就不调，能保留原文就保留，能用前一道关解决就不到后一道关。</strong>5 道关像漏斗一样把不同性质的"上下文膨胀"分流处理——单轮急性问题在第 1 道就死掉、累积型旧 tool_result 在第 3 道处理掉、显然无用的旧段在第 2 道删掉、即将超阈时在第 4 道分段归档保细粒度——只有这些都失败时，第 5 道的"完整 compact"才会出手做"丢精度换 token"的硬交易。
+</div>
+
+<p>关于"公开 build 仅签名"的那 3 道关，最后澄清一句：snip、cachedMicrocompact 的热路径、contextCollapse 三个模块在公开构建里都只剩 <code>// Auto-generated stub</code> 这种占位实现——但<strong>这并不代表 Anthropic 内部没实现</strong>。从这套接口、调用顺序、状态字段、错误恢复链路、context_efficiency 附件里的注释、还有恢复逻辑里对 <code>removedUuids</code> / <code>collapsedSpans</code> 的处理来看，这些功能内部跑得完整且体系化，只是公开 build 在打包时把它们剥离了（具体原因可能是内部 feature flag、依赖内部基础设施、或还在灰度）。所以本文里出现"仅签名"标签的地方，讨论的是<strong>从接口/恢复路径反推出来的设计意图</strong>，而不是"未实现的功能"。</p>
+
+<p>反过来说，从公开 build 能看到这套接口骨架本身就是一个有用的事实：<strong>5 道关之间的边界、调用顺序、状态字段</strong>都被钉死了——这意味着 Anthropic 内部即便频繁调整每一道关的实现策略（比如换 collapse 触发线、换 snip 决策模型），整个链路结构也是稳定的。这与上一篇<em>session 存储拆解</em>里"harness 一直在变、session 不变"的命题在同一条轴上：变化被关在叶子节点的实现里，骨架往外暴露的是稳定接口。</p>
+
+<hr>
+
+<h2>留个口子，欢迎评论区</h2>
+
+<p>5 道关里你最关心哪一道？哪一道你觉得在你的 agent 项目里也用得上、哪一道反而过度设计了？尤其想听听做长任务 agent 的同事的实践——你们是怎么解决"上下文越用越胀"的，以及 prompt cache 命中率你们一般做到多少。下一篇打算讲 <strong>Tool 系统与 Skill 机制</strong>，看 CC 是怎么把 60 多个工具组织起来不让模型选择困难的。</p>
+
+<hr>
+
+<h3>参考资料</h3>
+<ul>
+  <li>仓库相关代码（按 5 道关顺序）：
+    <ul>
+      <li><code>src/utils/toolResultStorage.ts</code> — applyToolResultBudget 实现</li>
+      <li><code>src/services/compact/snipCompact.ts</code> · <code>snipProjection.ts</code> — snip 模块（公开 build 剥离，仅接口签名）+ 视图投影</li>
+      <li><code>src/services/compact/microCompact.ts</code> · <code>cachedMicrocompact.ts</code> · <code>timeBasedMCConfig.ts</code> — microcompact 双路径</li>
+      <li><code>src/services/contextCollapse/index.ts</code> · <code>operations.ts</code> · <code>persist.ts</code> — context collapse 模块（公开 build 剥离，仅接口签名）</li>
+      <li><code>src/services/compact/autoCompact.ts</code> · <code>compact.ts</code> · <code>sessionMemoryCompact.ts</code> · <code>prompt.ts</code> — autocompact 两分支</li>
+    </ul>
+  </li>
+  <li>主流程调用点：<code>src/query.ts</code> 内层循环（5 个调用点按顺序）</li>
+</ul>
+
+</body>
+</html>
