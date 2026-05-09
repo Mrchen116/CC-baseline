@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Claude Code session 存储拆解：harness 一直在变（崩溃、升级、换代），对话凭什么不变？</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+    max-width: 860px;
+    margin: 40px auto;
+    padding: 0 24px 80px;
+    color: #1f2328;
+    line-height: 1.78;
+    font-size: 16px;
+    background: #fff;
+  }
+  h1 {
+    font-size: 26px;
+    line-height: 1.45;
+    border-bottom: 2px solid #1f2328;
+    padding-bottom: 14px;
+    margin-bottom: 28px;
+  }
+  h2 {
+    font-size: 21px;
+    margin-top: 44px;
+    border-left: 4px solid #2563eb;
+    padding-left: 12px;
+    line-height: 1.45;
+  }
+  h3 {
+    font-size: 17px;
+    margin-top: 30px;
+    color: #111;
+  }
+  h4 {
+    font-size: 15px;
+    margin-top: 20px;
+    color: #374151;
+  }
+  p { margin: 12px 0; }
+  code {
+    background: #f4f4f5;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: "SF Mono", Monaco, Consolas, "Courier New", monospace;
+    font-size: 13.5px;
+    color: #be185d;
+  }
+  pre {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 14px 18px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  pre code {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+  }
+  table {
+    border-collapse: collapse;
+    margin: 18px 0;
+    width: 100%;
+    font-size: 14px;
+  }
+  th, td {
+    border: 1px solid #d4d4d8;
+    padding: 8px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: #f4f4f5; font-weight: 600; }
+  blockquote {
+    border-left: 4px solid #fbbf24;
+    background: #fffbeb;
+    margin: 18px 0;
+    padding: 12px 18px;
+    color: #78350f;
+  }
+  blockquote.tip {
+    border-left-color: #2563eb;
+    background: #eff6ff;
+    color: #1e3a8a;
+  }
+  blockquote.quote {
+    border-left-color: #6b7280;
+    background: #f9fafb;
+    color: #374151;
+    font-style: italic;
+  }
+  .figure { margin: 28px 0; text-align: center; }
+  .figure-caption {
+    font-size: 13px;
+    color: #6b7280;
+    margin-top: 8px;
+    font-style: italic;
+  }
+  ul, ol { padding-left: 26px; }
+  li { margin: 6px 0; }
+  hr { border: none; border-top: 1px solid #e5e7eb; margin: 36px 0; }
+  .card-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin: 18px 0;
+  }
+  .card {
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 14px 16px;
+    background: #fafafa;
+  }
+  .card h4 {
+    margin-top: 0;
+    margin-bottom: 8px;
+    font-size: 14px;
+    color: #1e40af;
+  }
+  .card p {
+    margin: 6px 0 0;
+    font-size: 14px;
+    color: #374151;
+    line-height: 1.65;
+  }
+</style>
+</head>
+<body>
+
+<h1>Claude Code session 存储拆解：harness 一直在变（崩溃、升级、换代），对话凭什么不变？</h1>
+
+<p>Anthropic 在 <a href="https://www.anthropic.com/engineering/managed-agents" target="_blank">Managed Agents</a> 一文里讲过两句很有意思的话。</p>
+
+<p>第一句是关于崩溃的：</p>
+
+<blockquote class="quote">"Nothing in the harness needs to survive a crash."</blockquote>
+
+<p>翻译过来——<strong>跑 Claude Code 的进程随时可以死掉</strong>。崩溃、被 OOM kill、强制重启都行，对话状态不会丢。新进程拉起来就能从中断处接着干。</p>
+
+<p>第二句是关于未来的：</p>
+
+<blockquote class="quote">"We can't predict what specific context engineering will be required in future models."</blockquote>
+
+<p>翻译过来——<strong>上下文怎么压缩、怎么裁剪、system prompt 怎么拼，这些都是会变的</strong>。今天的最优解不是明天的最优解，Anthropic 自己也不知道一年后会怎么做。</p>
+
+<p>这两句话讲的是同一件事：<strong>harness 是个会变的东西</strong>。它会因为崩溃被替换、因为 CC 升级被替换、因为下一代模型被替换、因为压缩算法演进被替换。如果想让用户不为这些变化付代价（不丢历史、不停 session、不做迁移），唯一的办法就是把"会变的部分"和"必须长存的部分"在架构上彻底分开。</p>
+
+<p>本文拆解的是 Claude Code 怎么划的这条边界——具体落地就是那个 append-only 的 JSONL 文件：</p>
+
+<pre><code>~/.claude/projects/&lt;project-hash&gt;/sessions/&lt;sessionId&gt;.jsonl</code></pre>
+
+<p>这条边界划完之后，下面四种"harness 变化"对用户都<strong>透明</strong>：</p>
+
+<ul>
+  <li><strong>进程崩溃</strong> → 新 harness <code>wake(sessionId)</code> 读 JSONL，状态零丢失。</li>
+  <li><strong>CC 升级</strong> → 新版 harness 用新规则现场组装 prompt，旧 session resume 立刻吃到改进（修过的 bug、调过的 tone 全部生效）。</li>
+  <li><strong>压缩 / 上下文工程演进</strong> → 直接用新策略重读旧 JSONL，无需任何迁移。</li>
+  <li><strong>模型换代</strong> → 新 harness 按新 model 的 context 习惯重组上下文，session 文件本身不动。</li>
+</ul>
+
+<p>四种场景的共性都是：<strong>harness 在变，session 不变</strong>。本文会看到：</p>
+
+<ul>
+  <li>这条边界具体怎么划——五条设计哲学（§1）；</li>
+  <li>JSONL 物理上长什么样、文件布局怎么排（§2、§5）；</li>
+  <li>写入是怎么做的、压缩之后旧历史去哪儿、rewind / fork 又是另一回事（§3、§4、§6）；</li>
+  <li>最后从设计权衡的角度看——为什么 Anthropic 选了 append-only JSONL 而不是数据库或快照（§7）。</li>
+</ul>
+
+<hr>
+
+<h2>一、设计哲学：持久真相 vs 工作内存的分离</h2>
+
+<p>这是整套设计的总纲。一图说完：</p>
+
+<div class="figure">
+<svg width="820" height="430" viewBox="0 0 820 430" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .ttl1 { font: bold 15px -apple-system, sans-serif; fill: #111; }
+    .lbl1 { font: 13px -apple-system, sans-serif; fill: #1f2328; }
+    .sm1 { font: 11.5px -apple-system, sans-serif; fill: #6b7280; }
+    .mn1 { font: 12px "SF Mono", monospace; fill: #be185d; }
+  </style>
+  <defs>
+    <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <text x="410" y="22" text-anchor="middle" class="ttl1" font-size="16">持久真相 vs 工作内存：两份完全不同的数据</text>
+
+  <!-- 左边：JSONL -->
+  <rect x="40" y="50" width="340" height="320" fill="#fef3c7" stroke="#d97706" stroke-width="2" rx="6"/>
+  <text x="210" y="76" text-anchor="middle" class="ttl1" fill="#92400e">JSONL 文件</text>
+  <text x="210" y="94" text-anchor="middle" class="sm1">磁盘 · append-only · 完整历史</text>
+
+  <rect x="60" y="112" width="300" height="32" fill="#fffbeb" stroke="#f59e0b" rx="3"/>
+  <text x="70" y="132" class="lbl1">u-001  user "帮我列文件"</text>
+  <rect x="60" y="148" width="300" height="32" fill="#fffbeb" stroke="#f59e0b" rx="3"/>
+  <text x="70" y="168" class="lbl1">a-002  assistant tool_use(ls)</text>
+  <rect x="60" y="184" width="300" height="32" fill="#fffbeb" stroke="#f59e0b" rx="3"/>
+  <text x="70" y="204" class="lbl1">u-003  tool_result "..."</text>
+  <rect x="60" y="220" width="300" height="32" fill="#fffbeb" stroke="#f59e0b" rx="3"/>
+  <text x="70" y="240" class="lbl1">a-004  assistant "12 个文件..."</text>
+  <rect x="60" y="256" width="300" height="32" fill="#e9d5ff" stroke="#a855f7" rx="3"/>
+  <text x="70" y="276" class="lbl1">cb-001  ⟨compact_boundary⟩</text>
+  <rect x="60" y="292" width="300" height="32" fill="#fffbeb" stroke="#f59e0b" rx="3"/>
+  <text x="70" y="312" class="lbl1">sum-001  isCompactSummary</text>
+  <rect x="60" y="328" width="300" height="32" fill="#fffbeb" stroke="#f59e0b" rx="3"/>
+  <text x="70" y="348" class="lbl1">u-021  user "继续优化"</text>
+
+  <text x="210" y="392" text-anchor="middle" class="sm1" fill="#92400e">"发生过什么事件"——什么都不删、什么都不改</text>
+
+  <!-- 右边：mutableMessages -->
+  <rect x="440" y="50" width="340" height="320" fill="#dbeafe" stroke="#2563eb" stroke-width="2" rx="6"/>
+  <text x="610" y="76" text-anchor="middle" class="ttl1" fill="#1e40af">mutableMessages（内存）</text>
+  <text x="610" y="94" text-anchor="middle" class="sm1">运行时 · 可变 · 当前要发给 API 的视图</text>
+
+  <text x="460" y="124" class="sm1">压缩前：</text>
+  <rect x="460" y="132" width="300" height="22" fill="#eff6ff" stroke="#93c5fd" rx="2"/>
+  <text x="470" y="148" class="lbl1">u-001 · a-002 · u-003 · ... · u-020</text>
+
+  <text x="460" y="178" class="sm1">压缩后（mutableMessages 整段重建）：</text>
+  <rect x="460" y="186" width="300" height="22" fill="#fce7f3" stroke="#f472b6" rx="2"/>
+  <text x="470" y="202" class="lbl1">[摘要] Summary of previous...</text>
+  <rect x="460" y="212" width="300" height="22" fill="#fce7f3" stroke="#f472b6" rx="2"/>
+  <text x="470" y="228" class="lbl1">[附件] edited_text_file</text>
+  <rect x="460" y="238" width="300" height="22" fill="#fce7f3" stroke="#f472b6" rx="2"/>
+  <text x="470" y="254" class="lbl1">[附件] memory</text>
+  <rect x="460" y="264" width="300" height="22" fill="#eff6ff" stroke="#93c5fd" rx="2"/>
+  <text x="470" y="280" class="lbl1">u-021  最近一轮</text>
+
+  <text x="460" y="308" class="sm1">microcompact 后：</text>
+  <rect x="460" y="316" width="300" height="22" fill="#fef9c3" stroke="#eab308" rx="2"/>
+  <text x="470" y="332" class="lbl1">tool_result → "[已折叠]"  ← 占位</text>
+
+  <text x="610" y="392" text-anchor="middle" class="sm1" fill="#1e40af">"模型现在看到什么"——随时被裁剪、压缩、占位</text>
+
+  <!-- 中间箭头 -->
+  <path d="M 380 200 L 440 200" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arr3)"/>
+  <text x="410" y="186" text-anchor="middle" class="sm1" fill="#475569">resume 时</text>
+  <text x="410" y="216" text-anchor="middle" class="sm1" fill="#475569">回放重建</text>
+
+  <text x="410" y="415" text-anchor="middle" class="lbl1">同一份数据的两种表达：磁盘上事件全留，内存里按需重组——这是 Anthropic 设计的根</text>
+</svg>
+<div class="figure-caption">图 1：JSONL 是档案馆，mutableMessages 是工作台。压缩、microcompact、占位替换都只动右边，左边永远是事件全集。</div>
+</div>
+
+<p>下面五点来自 Anthropic 的 <a href="https://www.anthropic.com/engineering/managed-agents" target="_blank">Managed Agents</a> 一文，也是仓库代码这套机制的"所以然"。</p>
+
+<h3>1.1 Session 是"外化的上下文对象"</h3>
+
+<blockquote class="quote">"The session is an append-only log of everything that happened and functions as a context object that lives outside Claude's context window."</blockquote>
+
+<p>JSONL 文件不是服务于当前 API 调用的"工作内存"，而是一个<strong>独立于模型上下文窗口之外的历史档案馆</strong>。运行时内存里的 <code>mutableMessages</code> 负责即时的 API 交互；JSONL 负责忠实地记录一切，<em>哪怕某些内容已经从当前 API 上下文中被裁剪掉</em>。</p>
+
+<h3>1.2 Harness 是牲畜，不是宠物（Cattle, not pets）</h3>
+
+<blockquote class="quote">"Nothing in the harness needs to survive a crash."</blockquote>
+
+<p>因为 session log 在 harness（<code>query.ts</code> / <code>QueryEngine.ts</code> / REPL）外面，所以运行进程完全可以随意崩溃、重启、替换。新的 harness 只需要 <code>wake(sessionId)</code>，调用 <code>loadTranscriptFile</code> 把 JSONL 读回来，就能完整恢复状态。代码里每一轮用户输入、assistant 输出、工具结果都实时追加到 JSONL，正是这种"进程可随时死去"的底气来源。</p>
+
+<h3>1.3 持久化存储与上下文工程解耦</h3>
+
+<blockquote class="quote">"We can't predict what specific context engineering will be required in future models."</blockquote>
+
+<p>Anthropic 把边界划得很清楚：</p>
+
+<ul>
+  <li><strong>Session（JSONL）</strong>只保证"所有事件都可恢复"。它不做任何 smart 的压缩或筛选，只 append。</li>
+  <li><strong>Harness</strong> 承担所有上下文管理策略：组织、缓存、裁剪、compaction、microcompact、reactive compact。</li>
+</ul>
+
+<p>这意味着，如果未来有更好的上下文工程方法，可以直接重放 JSONL 重新组织，<strong>无需改变持久化格式</strong>。代码里 compaction 不修改 JSONL、只修改"内存中发给 API 的视图"，正是这一哲学的直接体现。</p>
+
+<h3>1.4 API system prompt 不持久化：解耦的另一面</h3>
+
+<p>§1.3 讲的是 harness 在"事件出去给模型"这条路径上的自由——可以任意 compact、microcompact、按需筛选。§1.4 讲解耦的<strong>另一面</strong>：harness 每轮拼出来要塞给模型的 system prompt（CC 版本号、git status、CLAUDE.md、动态段、工具列表等），<strong>也全都不写进 JSONL</strong>。</p>
+
+<p><code>src/context.ts</code> 每轮请求前现场组装一份新的 system prompt，<code>src/services/api/claude.ts</code> 直接传给 Anthropic SDK，用完即弃。JSONL 里 <code>type: "system"</code> 的消息是终端 UI 元数据（<code>api_metrics</code>、<code>compact_boundary</code>、<code>api_error</code>），与 API system prompt 完全无关。</p>
+
+<p><strong>为什么这一刀切得这么干净？还是 §1.3 那句话：Anthropic 不能预测未来 context engineering 需要长什么样子。</strong></p>
+
+<p>如果 system prompt 被持久化进 JSONL，相当于把"现在认为正确的 prompt 拼装方式"冻结到磁盘。任何未来改动都会卡在两难：</p>
+
+<ol>
+  <li>让旧 session 永远用旧 prompt——用户体验随版本越拉越差，bug 修了等于没修；</li>
+  <li>写迁移脚本批量改写历史 JSONL——破坏 append-only 的崩溃安全保证，还要为每次 prompt 改动维护 migration。</li>
+</ol>
+
+<p>把 system prompt 留在工作内存、每轮重新组装，三个具体好处自然就来了：</p>
+
+<ul>
+  <li><strong>CC 升级</strong>：旧 session resume 立刻吃到新版 prompt（修过的 bug、调过的 tone、新增的 tool 全部生效），而不是冻结在 session 创建那一刻。</li>
+  <li><strong>CLAUDE.md 中途改动</strong>：会话进行到一半时改项目根目录的 CLAUDE.md（加了新规约），下一轮自动重读注入，不用重启 session。</li>
+  <li><strong>git status 持续刷新</strong>：会话期间 commit / 切分支 / 改文件，每轮重新拉一次状态，模型看到的是当下而不是开局快照。</li>
+</ul>
+
+<p>但这些好处都是"派生品"，不是源命题。源命题是这条边界划分本身：</p>
+
+<blockquote class="tip"><strong>API system prompt 反映的是 harness 当下认为该说的话；session 反映的是已经发生过的事实。前者属于"can change"，后者属于"must not change"。把两类东西塞进同一份持久化里，就是把可演进性和可恢复性绑死。</strong></blockquote>
+
+<p>Anthropic 选择把它们分开——session 严格记录事件，harness 永远按最新规则现场组装。这条边界划完之后，prompt 怎么改、模型怎么换、上下文工程怎么演进，都不再绑架持久化格式。</p>
+
+<h3>1.5 通过 <code>getEvents()</code> 任意选择历史切片</h3>
+
+<p>因为 JSONL 是完整、不可变的，harness 可以在恢复时灵活地"读取子集"——跳过 <code>compact_boundary</code> 之前的旧历史、从某个 <code>leaf</code> 节点往回追、或加载 sidechain 的 agent 子对话。<strong>文件是单一真相源，读取策略可以千变万化</strong>。</p>
+
+<hr>
+
+<h2>二、核心定位与文件布局</h2>
+
+<p>每个 session 有一个<strong>仅追加（append-only）</strong>的主 JSONL 日志文件：</p>
+
+<pre><code>~/.claude/projects/&lt;project-hash&gt;/sessions/&lt;sessionId&gt;.jsonl</code></pre>
+
+<p>它是会话的<strong>唯一持久化真相源</strong>，用于进程崩溃或退出后通过 <code>--resume</code> / <code>--continue</code> 恢复完整状态。</p>
+
+<h3>2.1 子 agent（Sidechain）的独立文件</h3>
+
+<p>子 agent 的内部对话<strong>不写主文件</strong>，而是写到旁链（sidechain）文件中：</p>
+
+<pre><code>~/.claude/projects/&lt;project-hash&gt;/sessions/&lt;sessionId&gt;/subagents/agent-&lt;agentId&gt;.jsonl</code></pre>
+
+<ul>
+  <li>旁链消息带有 <code>isSidechain: true</code> 和 <code>agentId</code> 字段。</li>
+  <li>主 session resume 时<strong>不加载</strong>旁链文件，子 agent 的聊天记录对主链透明。</li>
+  <li>子 agent 恢复（如用户显式点击继续）时，通过 <code>getAgentTranscriptPath(agentId)</code> 拼出路径，单独读取。</li>
+</ul>
+
+<h3>2.2 Fork Session 的新文件</h3>
+
+<p><code>--fork-session</code> 不接管原 JSONL，而是保留启动时生成的新 <code>sessionId</code>，由 <code>useLogMessages</code> 在 REPL mount 时把旧消息逐条 <code>recordTranscript</code> 写入<strong>新文件</strong>。每条消息都会重新 stamp（<code>sessionId</code>、<code>timestamp</code>、<code>cwd</code> 等覆盖为 fork 后的值），确保 <code>content-replacement</code> 等元数据的 <code>sessionId</code> 键一致。</p>
+
+<h3>2.3 REPL 交互：从 query 到 JSONL 的数据流</h3>
+
+<p>交互 CLI 下，带 <code>tool_use</code> / <code>tool_result</code> 的 assistant、user 消息与<strong>普通消息走同一条管道</strong>：<code>query()</code> 只负责 <code>yield</code>；React state 在 <code>REPL.tsx</code> 的 <code>onQueryEvent → handleMessageFromStream</code> 回调里 <code>setMessages</code>；<code>messages</code> 变化触发 <code>useLogMessages</code> 的 <code>useEffect</code>，再 <code>recordTranscript</code> 追加 JSONL。</p>
+
+<div class="figure">
+<svg width="820" height="540" viewBox="0 0 820 540" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .ttl2 { font: bold 13px -apple-system, sans-serif; fill: #111; }
+    .lbl2 { font: 12.5px -apple-system, sans-serif; fill: #1f2328; }
+    .sm2 { font: 11px -apple-system, sans-serif; fill: #6b7280; }
+    .mn2 { font: 12px "SF Mono", monospace; fill: #be185d; }
+    .grouptag { font: bold 12px -apple-system, sans-serif; fill: #fff; }
+  </style>
+  <defs>
+    <marker id="arr4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arr5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#dc2626"/>
+    </marker>
+  </defs>
+
+  <text x="410" y="22" text-anchor="middle" class="ttl2" font-size="15">REPL.tsx · query.ts · sessionStorage.ts 三方协作</text>
+
+  <!-- query.ts subgraph (right top) -->
+  <rect x="540" y="50" width="260" height="100" fill="#fef3c7" stroke="#d97706" stroke-width="1.5" rx="6"/>
+  <rect x="540" y="50" width="260" height="22" fill="#d97706" rx="6"/>
+  <text x="670" y="66" text-anchor="middle" class="grouptag">query.ts（事件生产方）</text>
+  <rect x="560" y="84" width="220" height="50" fill="#fffbeb" stroke="#f59e0b" rx="4"/>
+  <text x="670" y="103" text-anchor="middle" class="ttl2">query() async generator</text>
+  <text x="670" y="120" text-anchor="middle" class="sm2">调 API · 执行工具 · yield 事件</text>
+
+  <!-- REPL.tsx subgraph (left, big) -->
+  <rect x="20" y="50" width="500" height="380" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5" rx="6"/>
+  <rect x="20" y="50" width="500" height="22" fill="#2563eb" rx="6"/>
+  <text x="270" y="66" text-anchor="middle" class="grouptag">REPL.tsx（调用方 · React 组件）</text>
+
+  <rect x="40" y="86" width="160" height="40" fill="#eff6ff" stroke="#60a5fa" rx="3"/>
+  <text x="120" y="111" text-anchor="middle" class="lbl2">用户发消息</text>
+
+  <rect x="40" y="146" width="160" height="40" fill="#eff6ff" stroke="#60a5fa" rx="3"/>
+  <text x="120" y="171" text-anchor="middle" class="lbl2">onQuery → onQueryImpl</text>
+
+  <rect x="40" y="206" width="160" height="40" fill="#eff6ff" stroke="#60a5fa" rx="3"/>
+  <text x="120" y="226" text-anchor="middle" class="lbl2">for await … of query()</text>
+  <text x="120" y="240" text-anchor="middle" class="sm2">驱动消费</text>
+
+  <rect x="40" y="266" width="160" height="40" fill="#eff6ff" stroke="#60a5fa" rx="3"/>
+  <text x="120" y="286" text-anchor="middle" class="lbl2">onQueryEvent(event)</text>
+
+  <rect x="40" y="326" width="160" height="46" fill="#eff6ff" stroke="#60a5fa" rx="3"/>
+  <text x="120" y="346" text-anchor="middle" class="lbl2">handleMessageFromStream</text>
+  <text x="120" y="362" text-anchor="middle" class="sm2">(utils/messages.ts)</text>
+
+  <!-- onMessage callback box -->
+  <rect x="240" y="266" width="260" height="106" fill="#fef9c3" stroke="#eab308" stroke-dasharray="4 2" rx="4"/>
+  <text x="370" y="284" text-anchor="middle" class="ttl2" fill="#854d0e">onMessage 回调</text>
+  <text x="370" y="300" text-anchor="middle" class="sm2">（定义在 onQueryEvent 内）</text>
+  <rect x="260" y="312" width="220" height="50" fill="#fef3c7" stroke="#ca8a04" rx="3"/>
+  <text x="370" y="332" text-anchor="middle" class="lbl2">setMessages(prev => [...])</text>
+  <text x="370" y="350" text-anchor="middle" class="sm2">或 progress / compact 分支</text>
+
+  <rect x="240" y="86" width="260" height="40" fill="#dcfce7" stroke="#22c55e" rx="3"/>
+  <text x="370" y="106" text-anchor="middle" class="lbl2">state: messages</text>
+  <text x="370" y="120" text-anchor="middle" class="sm2">React state</text>
+
+  <rect x="240" y="146" width="260" height="40" fill="#dcfce7" stroke="#22c55e" rx="3"/>
+  <text x="370" y="166" text-anchor="middle" class="lbl2">useLogMessages(messages, ignore)</text>
+  <text x="370" y="180" text-anchor="middle" class="sm2">React hook</text>
+
+  <rect x="240" y="206" width="260" height="40" fill="#dcfce7" stroke="#22c55e" rx="3"/>
+  <text x="370" y="226" text-anchor="middle" class="lbl2">useEffect</text>
+  <text x="370" y="240" text-anchor="middle" class="sm2">messages 引用变化时触发</text>
+
+  <!-- sessionStorage subgraph (bottom) -->
+  <rect x="20" y="450" width="780" height="80" fill="#fce7f3" stroke="#db2777" stroke-width="1.5" rx="6"/>
+  <rect x="20" y="450" width="780" height="22" fill="#db2777" rx="6"/>
+  <text x="410" y="466" text-anchor="middle" class="grouptag">sessionStorage.ts（落盘方）</text>
+  <rect x="80" y="484" width="170" height="36" fill="#fdf2f8" stroke="#ec4899" rx="3"/>
+  <text x="165" y="506" text-anchor="middle" class="lbl2">recordTranscript()</text>
+  <rect x="320" y="484" width="200" height="36" fill="#fdf2f8" stroke="#ec4899" rx="3"/>
+  <text x="420" y="506" text-anchor="middle" class="lbl2">insertMessageChain → appendEntry</text>
+  <rect x="590" y="484" width="170" height="36" fill="#fdf2f8" stroke="#ec4899" rx="3"/>
+  <text x="675" y="506" text-anchor="middle" class="lbl2">*.jsonl</text>
+
+  <!-- arrows in REPL.tsx 左列：用户 → onQuery → for await → onQueryEvent → handleMessageFromStream -->
+  <path d="M 120 126 L 120 146" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arr4)"/>
+  <path d="M 120 186 L 120 206" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arr4)"/>
+  <path d="M 120 246 L 120 266" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arr4)"/>
+  <path d="M 120 306 L 120 326" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arr4)"/>
+
+  <!-- handleMessageFromStream → setMessages（仅完整消息走这条） -->
+  <path d="M 200 348 C 220 348 240 336 260 336" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arr4)"/>
+  <text x="225" y="328" class="sm2">完整消息</text>
+
+  <!-- React 响应链：setMessages → state → useLogMessages → useEffect（向上、向下、向下） -->
+  <!-- setMessages 改 state：从右上角向上沿右外侧绕过 useEffect/useLogMessages 进入 state -->
+  <path d="M 480 312 C 540 312 540 106 500 106" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arr4)"/>
+  <text x="556" y="216" class="sm2" fill="#475569">setMessages</text>
+  <text x="556" y="232" class="sm2" fill="#475569">改 state</text>
+  <!-- state → useLogMessages（重渲染触发 hook 重跑） -->
+  <path d="M 370 126 L 370 146" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arr4)"/>
+  <!-- useLogMessages → useEffect（hook 内部） -->
+  <path d="M 370 186 L 370 206" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arr4)"/>
+
+  <!-- query.ts → for await（跨文件，沿上方绕开 React state 列） -->
+  <path d="M 670 84 C 670 30 200 30 200 206" stroke="#dc2626" stroke-width="2.2" fill="none" marker-end="url(#arr5)"/>
+  <text x="430" y="22" text-anchor="middle" class="ttl2" fill="#dc2626">⟶ yield 事件（跨文件驱动消费）</text>
+
+  <!-- useEffect → recordTranscript（跨文件落盘） -->
+  <path d="M 370 246 C 370 380 200 420 165 484" stroke="#475569" stroke-width="1.5" stroke-dasharray="5 3" fill="none" marker-end="url(#arr4)"/>
+  <text x="245" y="406" class="sm2">messages 变化时触发</text>
+
+  <!-- sessionStorage 内部链：recordTranscript → insertMessageChain → *.jsonl -->
+  <path d="M 250 502 L 320 502" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arr4)"/>
+  <path d="M 520 502 L 590 502" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arr4)"/>
+</svg>
+<div class="figure-caption">图 2：query.ts 是事件生产方，REPL.tsx 是消费/调度方，sessionStorage.ts 落盘。三方解耦，串起来才是完整数据流。</div>
+</div>
+
+<h4>读图要点</h4>
+
+<ol>
+  <li>三个框对应三个文件：<strong><code>REPL.tsx</code>（调用方）</strong>、<strong><code>query.ts</code>（事件生产方）</strong>、<strong><code>sessionStorage.ts</code>（落盘）</strong>。</li>
+  <li><code>query()</code> 是 async generator，定义在 <code>query.ts</code>，由 <code>REPL.tsx</code> 的 <code>for await...of</code> 驱动消费——红色粗箭头表达跨文件调用。</li>
+  <li><code>handleMessageFromStream</code> 定义在 <code>utils/messages.ts</code>，但在 REPL 的回调里被调用，所以节点放在 REPL 框内。</li>
+  <li><code>handleMessageFromStream</code> <strong>不直接调 <code>setMessages</code></strong>，而是通过 <code>onMessage</code> 回调间接调用。<code>stream_event</code>（token 增量）只更新响应长度，不调 <code>onMessage</code>；<strong>只有完整消息</strong>（assistant / user / progress / compact）才走 <code>onMessage → setMessages</code>。</li>
+  <li><code>setMessages → useLogMessages → useEffect → recordTranscript</code> 是 React 响应式链：<code>messages</code> state 变化触发 hook，hook 内 <code>useEffect</code> 调 <code>recordTranscript</code> 写盘。</li>
+</ol>
+
+<hr>
+
+<h2>三、写入模型：仅追加，不修改历史</h2>
+
+<h3>3.1 写入器</h3>
+
+<p><code>src/utils/sessionStorage.ts</code> 中的 <code>TranscriptWriter</code> 负责写入：</p>
+
+<ul>
+  <li>使用 <code>fs.appendFile</code> 批量追加新行。</li>
+  <li>带内存缓冲队列和定时 flush（默认异步批量写），不阻塞主线程。</li>
+  <li>日常对话运行时<strong>只写不读</strong>；内存中的 <code>mutableMessages</code> 是运行时真相源。</li>
+</ul>
+
+<h3>3.2 Compaction（上下文压缩）与日志的关系</h3>
+
+<p>无论发生哪种压缩，<strong>已写入的 JSONL 行不会被修改或删除</strong>：</p>
+
+<ul>
+  <li><strong>MicroCompact</strong>：仅把旧工具输出替换为占位符发送给 API，原始内容仍留在 JSONL 中。</li>
+  <li><strong>传统 API 摘要压缩 / Session Memory Compact</strong>：在内存里生成摘要，然后插入一条 <code>compact_boundary</code> 边界标记。resume 时通过边界标记跳过前面的旧历史，但文件本身不会重写。</li>
+</ul>
+
+<blockquote>唯一例外是 <code>removeMessageByUuid</code>，用于清理失败的流式消息孤立记录。它会做尾部 <code>truncate + write</code>，触发场景极少。</blockquote>
+
+<h3>3.3 Fork Session 的写入</h3>
+
+<p><code>--fork-session</code> 的写入与普通 resume 不同：</p>
+
+<table>
+<thead>
+<tr><th>维度</th><th>普通 resume（<code>--resume</code>）</th><th>Fork resume（<code>--fork-session</code>）</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Session ID</strong></td><td>复用旧的</td><td>保留启动时生成的新 ID</td></tr>
+<tr><td><strong>JSONL 文件</strong></td><td>接管原来的（<code>adoptResumedSessionFile</code>）</td><td><strong>新文件</strong>（<code>getTranscriptPath()</code> 按新 ID 推导）</td></tr>
+<tr><td><strong>消息复制</strong></td><td>已经在文件里，无需复制</td><td><code>useLogMessages</code> 在 REPL mount 时逐条 <code>recordTranscript</code> 写入</td></tr>
+<tr><td><strong>stamp 处理</strong></td><td>原样保留</td><td>每条消息重新 stamp（<code>sessionId</code> / <code>timestamp</code> / <code>cwd</code> 覆盖为新值）</td></tr>
+</tbody>
+</table>
+
+<p><strong>为什么必须重新 stamp？</strong>如果不覆盖 <code>sessionId</code>，新 JSONL 中的消息会带着旧 <code>sessionId</code>，而后续写入的 <code>content-replacement</code> 元数据是新 <code>sessionId</code>，导致 <code>loadFullLog</code> 按 <code>sessionId</code> 查找 replacement 时 miss——工具结果被误分类为 <code>FROZEN</code>，缓存失效。</p>
+
+<hr>
+
+<h2>四、消费场景：何时读取这个文件</h2>
+
+<table>
+<thead>
+<tr><th>场景</th><th>读取方式</th><th>说明</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>启动恢复</strong>（<code>--continue</code>、<code>--resume</code>）</td><td><code>loadConversationForResume → loadTranscriptFile</code></td><td>全量或按需解析 JSONL，沿 <code>parentUuid</code> 重建对话链</td></tr>
+<tr><td><strong>列表展示</strong>（<code>/resume</code> picker）</td><td><code>loadSameRepoMessageLogs</code> / <code>loadAllProjectsMessageLogs</code></td><td>先纯 <code>stat</code> 扫描，再对候选会话读 head/tail（约 16KB）提取标题和摘要</td></tr>
+<tr><td><strong>子 agent 恢复</strong></td><td><code>getAgentTranscript</code></td><td>读取 sidechain 文件 <code>agents/&lt;agentId&gt;.jsonl</code></td></tr>
+</tbody>
+</table>
+
+<h3>4.1 <code>loadTranscriptFile</code> 的加载策略</h3>
+
+<ul>
+  <li>小文件（<strong>&lt; 5MB</strong>）：直接全量读取。</li>
+  <li>大文件（<strong>&gt; 5MB</strong>）：利用 <code>compact_boundary</code> 做前向跳读，跳过 pre-boundary 的过期内容，只保留 post-boundary 的消息和元数据。</li>
+  <li>然后通过 <code>buildConversationChain</code> 从最新 <code>leaf</code> 消息沿 <code>parentUuid</code> 往回追，重建完整对话链。</li>
+</ul>
+
+<h3>4.2 为什么 JSONL 物理是 DAG，逻辑是单链</h3>
+
+<p>正常对话时，每条消息的 <code>parentUuid</code> 指向上一条，文件里确实是个链表。但 <strong>rewind（回退）</strong>会让它变成<strong>有向无环图（DAG）</strong>。</p>
+
+<p>例如用户 rewind 到 B 后重新发了问题 E，append-only 不删旧数据：</p>
+
+<div class="figure">
+<svg width="640" height="240" viewBox="0 0 640 240" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .nl { font: bold 16px -apple-system, sans-serif; fill: #fff; }
+    .nlbl { font: 12px -apple-system, sans-serif; fill: #6b7280; }
+    .ttldag { font: bold 13px -apple-system, sans-serif; fill: #1f2328; }
+  </style>
+  <defs>
+    <marker id="arrdag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrdead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#cbd5e1"/>
+    </marker>
+  </defs>
+
+  <text x="320" y="22" text-anchor="middle" class="ttldag" font-size="14">rewind 后的物理结构（实际写入 JSONL 的）</text>
+
+  <!-- A -->
+  <circle cx="80" cy="100" r="28" fill="#2563eb"/>
+  <text x="80" y="106" text-anchor="middle" class="nl">A</text>
+  <text x="80" y="148" text-anchor="middle" class="nlbl">root</text>
+
+  <!-- B -->
+  <circle cx="200" cy="100" r="28" fill="#2563eb"/>
+  <text x="200" y="106" text-anchor="middle" class="nl">B</text>
+  <text x="200" y="148" text-anchor="middle" class="nlbl">parent=A</text>
+
+  <!-- C (dead branch) -->
+  <circle cx="340" cy="60" r="28" fill="#cbd5e1"/>
+  <text x="340" y="66" text-anchor="middle" class="nl">C</text>
+  <text x="340" y="38" text-anchor="middle" class="nlbl">parent=B</text>
+
+  <!-- D (dead branch) -->
+  <circle cx="460" cy="60" r="28" fill="#cbd5e1"/>
+  <text x="460" y="66" text-anchor="middle" class="nl">D</text>
+  <text x="460" y="38" text-anchor="middle" class="nlbl">parent=C  · 死分支</text>
+
+  <!-- E (live branch) -->
+  <circle cx="340" cy="160" r="28" fill="#16a34a"/>
+  <text x="340" y="166" text-anchor="middle" class="nl">E</text>
+  <text x="340" y="208" text-anchor="middle" class="nlbl">parent=B  · 新 leaf</text>
+
+  <!-- arrows -->
+  <line x1="108" y1="100" x2="172" y2="100" stroke="#475569" stroke-width="2" marker-end="url(#arrdag)"/>
+  <line x1="222" y1="86" x2="316" y2="68" stroke="#cbd5e1" stroke-width="2" marker-end="url(#arrdead)"/>
+  <line x1="368" y1="60" x2="432" y2="60" stroke="#cbd5e1" stroke-width="2" marker-end="url(#arrdead)"/>
+  <line x1="222" y1="114" x2="316" y2="152" stroke="#16a34a" stroke-width="2.5" marker-end="url(#arrdag)"/>
+
+  <!-- legend -->
+  <rect x="500" y="170" width="14" height="14" fill="#2563eb"/>
+  <text x="520" y="182" class="nlbl">主链</text>
+  <rect x="500" y="190" width="14" height="14" fill="#cbd5e1"/>
+  <text x="520" y="202" class="nlbl">死分支（仍在文件里）</text>
+  <rect x="500" y="210" width="14" height="14" fill="#16a34a"/>
+  <text x="520" y="222" class="nlbl">最新 leaf</text>
+</svg>
+<div class="figure-caption">图 3：rewind 让文件变成 DAG。死分支（C → D）物理保留，逻辑被丢弃。</div>
+</div>
+
+<p><code>buildConversationChain</code> 恢复时，先从所有 terminal 消息（没有 child 的节点）中找到最新的 leaf（E），然后沿 <code>parentUuid</code> 往回追溯到 root。死分支 C → D 被自然丢弃。<strong>物理存储是 DAG，逻辑恢复是单链。</strong></p>
+
+<p>其他产生分支的情况：</p>
+
+<ul>
+  <li><strong>Fork session</strong>：复制现有链到新 session 继续</li>
+  <li><strong>Snip（删除消息）</strong>：<code>applySnipRemovals</code> 重连 <code>parentUuid</code>，被删的链段物理保留</li>
+  <li><strong>并行 tool_use 拆分</strong>：streaming 时一个 assistant 响应拆成 N 条消息，兄弟块通过 <code>message.id</code> 关联</li>
+</ul>
+
+<hr>
+
+<h2>五、JSONL 行类型</h2>
+
+<p>每一行是一个独立的 JSON 对象，分两大类：<strong>消息类条目</strong> 和 <strong>元数据类条目</strong>。</p>
+
+<h3>5.1 消息类条目（TranscriptMessage）</h3>
+
+<p>对应 <code>user / assistant / system / attachment / progress</code> 等消息，是文件中的主体内容。</p>
+
+<h4>基础字段（来自 Message）</h4>
+
+<table>
+<thead><tr><th>字段</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>type</code></td><td><code>"user"</code> / <code>"assistant"</code> / <code>"system"</code> / <code>"attachment"</code> / <code>"progress"</code> / <code>"grouped_tool_use"</code> / <code>"collapsed_read_search"</code>。<br>注意 <code>"system"</code> 是 UI 元数据（如 <code>api_metrics</code>、<code>compact_boundary</code>），<strong>不是</strong> API system prompt。</td></tr>
+<tr><td><code>uuid</code></td><td>消息唯一标识</td></tr>
+<tr><td><code>isMeta</code></td><td><code>user</code> 消息是否为合成提示（如 <code>/compact</code> 注入的指令）</td></tr>
+<tr><td><code>isCompactSummary</code></td><td>是否为压缩后的摘要消息</td></tr>
+<tr><td><code>toolUseResult</code></td><td>工具执行结果（内部标记）</td></tr>
+<tr><td><code>isVisibleInTranscriptOnly</code></td><td>是否仅在 transcript 中可见</td></tr>
+<tr><td><code>attachment</code></td><td><code>attachment</code> 类型时的附件对象</td></tr>
+<tr><td><code>message</code></td><td><code>assistant</code> 类型时的 API 原始结构（<code>role</code>、<code>id</code>、<code>content</code>、<code>usage</code>）</td></tr>
+</tbody>
+</table>
+
+<h4>序列化附加字段（SerializedMessage）</h4>
+
+<p><strong>每条消息都会重复带上这些 session 级字段</strong>，因为 JSONL 不支持共享头：</p>
+
+<table>
+<thead><tr><th>字段</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>cwd</code></td><td>当前工作目录</td></tr>
+<tr><td><code>sessionId</code></td><td>所属会话 UUID</td></tr>
+<tr><td><code>timestamp</code></td><td>ISO 格式写入时间</td></tr>
+<tr><td><code>version</code></td><td>CLI 版本号（如 <code>2.1.888</code>）</td></tr>
+<tr><td><code>userType</code></td><td>用户类型标识</td></tr>
+<tr><td><code>entrypoint</code></td><td>入口点（<code>cli</code> / <code>sdk-ts</code> / <code>sdk-py</code>）</td></tr>
+<tr><td><code>gitBranch</code></td><td>当前 git 分支</td></tr>
+<tr><td><code>slug</code></td><td>会话 slug（用于 plan 文件关联）</td></tr>
+</tbody>
+</table>
+
+<h4>链式结构字段</h4>
+
+<table>
+<thead><tr><th>字段</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>parentUuid</code></td><td>父消息 UUID（<code>null</code> 表示链头）</td></tr>
+<tr><td><code>logicalParentUuid</code></td><td>逻辑父 UUID（compact boundary 时保留逻辑关系）</td></tr>
+<tr><td><code>isSidechain</code></td><td>是否为子 agent 的旁链消息</td></tr>
+<tr><td><code>agentId</code></td><td>子 agent ID（旁链消息有值）</td></tr>
+<tr><td><code>teamName</code></td><td>swarm team 名称</td></tr>
+<tr><td><code>agentName</code> / <code>agentColor</code></td><td>agent 自定义名称 / 颜色</td></tr>
+<tr><td><code>promptId</code></td><td><code>user</code> 消息关联的 OTel <code>prompt.id</code></td></tr>
+</tbody>
+</table>
+
+<h3>5.2 元数据类条目</h3>
+
+<p>所有元数据条目都有固定的 <code>type</code> discriminator，字段也是固定的。这类条目最多——为方便阅读，按用途分成四组：</p>
+
+<h4>第 1 组：会话展示与列表（<code>/resume</code> picker 用）</h4>
+
+<table>
+<thead><tr><th><code>type</code></th><th>记录的内容</th><th>写入时机</th></tr></thead>
+<tbody>
+<tr><td><code>summary</code></td><td>某条对话链（leaf）的摘要文本</td><td>AgentTool 子 agent 结束时写入 sidechain，方便 resume 快速加载</td></tr>
+<tr><td><code>custom-title</code></td><td>用户给会话起的自定义标题</td><td><code>/rename</code> 时写入；compact 前后和退出时通过 <code>reAppendSessionMetadata</code> 重刷到尾部</td></tr>
+<tr><td><code>ai-title</code></td><td>AI 自动生成的会话标题</td><td>AI 生成后写入一次；可被新 AI 标题覆盖，但不能覆盖用户自定义标题</td></tr>
+<tr><td><code>last-prompt</code></td><td>用户最近一轮输入的文本</td><td>每轮用户发消息后缓存写入；用于 picker 展示"最近做了什么"</td></tr>
+<tr><td><code>task-summary</code></td><td>后台任务（fork）的阶段性摘要</td><td>长任务每隔几分钟 fork 子进程生成，<code>claude ps</code> 用来展示实时状态</td></tr>
+<tr><td><code>tag</code></td><td>用户给会话打的标签</td><td><code>/tag</code> 时写入；compact / 退出时刷新</td></tr>
+<tr><td><code>pr-link</code></td><td>关联的 GitHub PR 信息</td><td><code>/branch pr</code> 等命令关联 PR 时写入；compact / 退出时刷新</td></tr>
+</tbody>
+</table>
+
+<h4>第 2 组：Agent 配置（外观与切换）</h4>
+
+<table>
+<thead><tr><th><code>type</code></th><th>记录的内容</th><th>写入时机</th></tr></thead>
+<tbody>
+<tr><td><code>agent-name</code></td><td>Agent 自定义名称</td><td><code>/rename</code> 修改时写入</td></tr>
+<tr><td><code>agent-color</code></td><td>Agent 颜色</td><td>同上</td></tr>
+<tr><td><code>agent-setting</code></td><td>Agent 配置类型</td><td><code>--agent</code> 切换 agent 定义时写入</td></tr>
+<tr><td><code>mode</code></td><td>会话运行模式（<code>coordinator</code> / <code>normal</code>）</td><td>用户或系统切换模式时写入</td></tr>
+<tr><td><code>worktree-state</code></td><td>当前是否处于 worktree 中</td><td>进入或退出 worktree 时写入；值为对象=在 worktree 里，<code>null</code>=已退出</td></tr>
+</tbody>
+</table>
+
+<h4>第 3 组：内容替换 & 文件归因（让 prompt cache 不被打破）</h4>
+
+<table>
+<thead><tr><th><code>type</code></th><th>记录的内容</th><th>写入时机</th></tr></thead>
+<tbody>
+<tr><td><code>content-replacement</code></td><td>某些工具结果被替换为更小 stub 的记录</td><td>内容替换机制触发时写入；resume 时按记录把 stub 还原回原文，<strong>保证 prompt cache 稳定</strong></td></tr>
+<tr><td><code>file-history-snapshot</code></td><td>文件编辑历史的快照</td><td>文件历史状态变更时写入，resume 后可继续追踪文件变更</td></tr>
+<tr><td><code>attribution-snapshot</code></td><td>Claude 对代码的字符级贡献量快照</td><td>文件大规模变更后写入，用于 <code>/commit</code> 时的 co-author 归因</td></tr>
+<tr><td><code>speculation-accept</code></td><td>推测执行被用户接受的记录</td><td>prompt suggestion 的推测编辑被确认应用时写入，用于统计节省时间</td></tr>
+</tbody>
+</table>
+
+<h4>第 4 组：Context Collapse & 异步队列</h4>
+
+<table>
+<thead><tr><th><code>type</code></th><th>记录的内容</th><th>写入时机</th></tr></thead>
+<tbody>
+<tr><td><code>marble-origami-commit</code></td><td>Context Collapse 提交（归档了哪些消息）</td><td>每次 context-collapse 折叠一段消息时写入；resume 后 <code>/context</code> 能还原折叠视图</td></tr>
+<tr><td><code>marble-origami-snapshot</code></td><td>Context Collapse 队列快照</td><td>staged collapse 状态变化后写入（last-wins）；resume 后恢复未完成的折叠调度</td></tr>
+<tr><td><code>queue-operation</code></td><td>消息队列的操作记录</td><td>异步消息队列处理时写入，resume 后重建队列状态</td></tr>
+</tbody>
+</table>
+
+<blockquote class="tip"><strong>一个共同模式：</strong>第 1、2 组的元数据都会在 compact 前后和退出时被 <code>reAppendSessionMetadata</code> <strong>重新刷到文件尾部</strong>。原因是 picker 只读 head/tail 约 16KB——如果元数据被压在文件中段，列表里就看不到了。这种"重复 re-append"是磁盘空间换显示完整性的典型权衡。</blockquote>
+
+<hr>
+
+<h2>六、写入示例：正常对话与压缩场景</h2>
+
+<p>下面用简化后的 JSONL 行展示两个典型场景，帮助理解文件里实际会出现什么内容。<strong>每行都是独立 JSON，按时间顺序追加。</strong></p>
+
+<h3>6.1 场景 A：正常 Agent 工作（一轮工具调用）</h3>
+
+<p>用户问"帮我列出当前目录的文件"，Claude 调用 <code>BashTool</code> 执行 <code>ls</code>，然后返回结果。</p>
+
+<p><strong>这一轮的 yield 流程与 JSONL 写入关系：</strong></p>
+
+<ul>
+  <li>用户发送消息 → <code>REPL.tsx</code> 直接 <code>setMessages</code> + <code>recordTranscript</code> → <strong>JSONL 写入第 1 行（user）</strong></li>
+  <li><code>query()</code> 调 API，流式输出过程中 yield 大量 <code>stream_event</code> → <strong>不写 JSONL</strong>，只更新 UI 显示长度</li>
+  <li>yield 完整 <code>assistant</code> 消息（含 <code>tool_use</code> block）→ <strong>JSONL 写入第 2 行（assistant）</strong></li>
+  <li>工具执行完成，yield <code>user</code> 消息（含 <code>tool_result</code> block）→ <strong>JSONL 写入第 3 行（tool_result）</strong></li>
+  <li>递归进入下一轮 API，再 yield <code>stream_event</code> → <strong>不写 JSONL</strong></li>
+  <li>最后 yield <code>assistant</code> 最终回复 → <strong>JSONL 写入第 4 行（assistant）</strong></li>
+</ul>
+
+<p>对应的 JSONL 内容：</p>
+
+<pre><code>{"type":"user","uuid":"u-001","sessionId":"sess-abc","timestamp":"2026-05-08T10:00:00Z","version":"2.1.888","cwd":"/home/user/project","parentUuid":null,"message":{"role":"user","content":[{"type":"text","text":"帮我列出当前目录的文件"}]}}
+{"type":"assistant","uuid":"a-002","sessionId":"sess-abc","timestamp":"2026-05-08T10:00:03Z","version":"2.1.888","cwd":"/home/user/project","parentUuid":"u-001","message":{"role":"assistant","id":"msg-002","content":[{"type":"tool_use","id":"tu-001","name":"BashTool","input":{"command":"ls -la"}}],"usage":{"input_tokens":145,"output_tokens":25}}}
+{"type":"user","uuid":"u-003","sessionId":"sess-abc","timestamp":"2026-05-08T10:00:04Z","version":"2.1.888","cwd":"/home/user/project","parentUuid":"a-002","toolUseResult":"total 128\ndrwxr-xr-x  5 user user 4096 May  8 09:00 .\n...","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-001","content":"total 128\ndrwxr-xr-x  5 user user 4096 May  8 09:00 .\n..."}]}}
+{"type":"assistant","uuid":"a-004","sessionId":"sess-abc","timestamp":"2026-05-08T10:00:06Z","version":"2.1.888","cwd":"/home/user/project","parentUuid":"u-003","message":{"role":"assistant","id":"msg-004","content":[{"type":"text","text":"当前目录共有 12 个文件和文件夹..."}],"usage":{"input_tokens":680,"output_tokens":120}}}</code></pre>
+
+<h4>要点</h4>
+
+<ul>
+  <li>一次 <code>yield</code> 只产出一个事件，<code>postCompactMessages</code> 是用循环逐个 <code>yield message</code> 的。</li>
+  <li><code>stream_event</code>（token 增量）yield 时不写 JSONL，只更新响应长度；只有完整消息才走 <code>onMessage → setMessages → recordTranscript</code>。</li>
+  <li>所有消息通过 <code>parentUuid</code> 形成单链表：<code>u-001 → a-002 → u-003 → a-004</code>。</li>
+  <li><code>usage.input_tokens</code> 在每条 assistant message 上记录，是 <code>finalContextTokensFromLastResponse</code> 读取的数据源。</li>
+</ul>
+
+<h3>6.2 场景 B：触发压缩（AutoCompact）后</h3>
+
+<p>假设上述对话又进行了 20 轮，上下文膨胀到 180K tokens，触发了 autocompact。</p>
+
+<p><strong>这一轮的 yield 流程：</strong></p>
+
+<ul>
+  <li><code>deps.autocompact()</code> 成功返回 <code>compactionResult</code></li>
+  <li><code>query()</code> 用 <code>buildPostCompactMessages(result)</code> 组装出 4 条消息</li>
+  <li>循环 yield 这 4 条消息，每条独立消费、独立写盘</li>
+  <li>旧历史（前面 20+ 轮）<strong>不会被删除或修改</strong></li>
+</ul>
+
+<p>压缩前文件尾部（最后两条）：</p>
+
+<pre><code>// ... 前面 20+ 轮的对话历史仍然保留在文件中
+{"type":"assistant","uuid":"a-042","sessionId":"sess-abc","timestamp":"2026-05-08T10:25:00Z","version":"2.1.888","cwd":"/home/user/project","parentUuid":"u-042","message":{"role":"assistant",...}}
+{"type":"user","uuid":"u-043","sessionId":"sess-abc","timestamp":"2026-05-08T10:25:30Z","version":"2.1.888","cwd":"/home/user/project","parentUuid":"a-042","message":{"role":"user","content":[{"type":"text","text":"继续优化那个函数"}]}}</code></pre>
+
+<p>触发压缩后，文件<strong>继续追加</strong>四行（<code>buildPostCompactMessages</code> 的顺序）：</p>
+
+<pre><code>{"type":"system","uuid":"cb-001","sessionId":"sess-abc","timestamp":"2026-05-08T10:25:35Z","version":"2.1.888","cwd":"/home/user/project","parentUuid":"u-043","content":[{"type":"text","text":"Compact boundary"}],"compactMetadata":{"turnId":"compact-001","turnCounter":0,"preCompactTokenCount":182400,"postCompactTokenCount":12400,"compactionModel":"claude-3-5-haiku-20241022"}}
+{"type":"assistant","uuid":"sum-001","sessionId":"sess-abc","timestamp":"2026-05-08T10:25:35Z","version":"2.1.888","cwd":"/home/user/project","parentUuid":"cb-001","isCompactSummary":true,"message":{"role":"assistant","id":"msg-sum-001","content":[{"type":"text","text":"Summary of previous conversation: The user asked me to list files, then modify src/utils.ts, then add tests. Key decisions: used BashTool for ls, FileEditTool for refactoring, created 3 new test cases in src/utils.test.ts."}]}}
+{"type":"user","uuid":"att-001","sessionId":"sess-abc","timestamp":"2026-05-08T10:25:35Z","version":"2.1.888","cwd":"/home/user/project","parentUuid":"sum-001","attachment":{"type":"edited_text_file","filePath":"src/utils.ts","diff":"@@ -10,7 +10,7 @@..."}}
+{"type":"user","uuid":"att-002","sessionId":"sess-abc","timestamp":"2026-05-08T10:25:35Z","version":"2.1.888","cwd":"/home/user/project","parentUuid":"att-001","attachment":{"type":"memory","memoryId":"memory-003","content":"User prefers snake_case for function names"}}</code></pre>
+
+<h4>压缩后的关键变化</h4>
+
+<ol>
+  <li><strong>旧历史未被删除</strong>：<code>a-042</code>、<code>u-043</code> 以及前面所有轮次仍然留在 JSONL 文件中，resume 时通过 <code>compact_boundary</code> 的 <code>turnId</code> 跳过它们。</li>
+  <li><strong>插入 compact_boundary 系统消息</strong>：<code>cb-001</code> 标记压缩边界，记录 <code>preCompactTokenCount</code>（182K）和 <code>postCompactTokenCount</code>（12.4K）。</li>
+  <li><strong>插入摘要消息</strong>：<code>sum-001</code> 是 <code>isCompactSummary: true</code> 的 assistant 消息，后续 API 调用时替代被摘要掉的 20 轮历史。</li>
+  <li><strong>附件保留</strong>：被修改的文件（<code>edited_text_file</code>）和重要 memory 作为 <code>attachment</code> 类型消息保留。</li>
+  <li><strong>parentUuid 重新链式连接</strong>：<code>u-043.parentUuid = a-042</code>，<code>cb-001.parentUuid = u-043</code>，<code>sum-001.parentUuid = cb-001</code>，形成新逻辑链。resume 时从最新 leaf 往回追，经过边界标记找到摘要，然后跳过边界之前的旧历史。</li>
+</ol>
+
+<h3>6.3 对比总结</h3>
+
+<table>
+<thead>
+<tr><th>维度</th><th>正常对话</th><th>触发压缩后</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>旧历史</strong></td><td>自然追加</td><td><strong>保留</strong>，不被删除或修改</td></tr>
+<tr><td><strong>新写入内容</strong></td><td>user / assistant / tool_result</td><td><code>compact_boundary</code> + <code>summary</code> + <code>attachments</code> + <code>hookResults</code></td></tr>
+<tr><td><strong>API 上下文</strong></td><td>完整历史</td><td>摘要 + 保留附件 + 最近几轮</td></tr>
+<tr><td><strong>文件大小</strong></td><td>持续增长</td><td>仍然增长（append-only），但 resume 加载时利用 boundary 跳读</td></tr>
+<tr><td><strong><code>taskBudgetRemaining</code></strong></td><td>不涉及</td><td>用 <code>preCompactTokenCount</code> 扣减，补偿服务端"看不到的历史"</td></tr>
+<tr><td><strong>yield 次数</strong></td><td>多轮 yield（stream_event + 完整消息交替）</td><td>compact 后额外 yield 4 条 post-compact 消息</td></tr>
+</tbody>
+</table>
+
+<hr>
+
+<h2>七、设计权衡</h2>
+
+<p>把前面这些机制串起来看，会发现 Anthropic 在三处都选了"看起来更笨"的方案，但每一个选择背后都有非常具体的工程理由：</p>
+
+<table>
+<thead>
+<tr><th>选择</th><th>原因</th></tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>每条消息自带 session 级字段</strong></td>
+<td>由于 append-only 无法共享文件头，只能用磁盘空间换写入性能。1000 轮会话会把 <code>sessionId</code> / <code>cwd</code> / <code>version</code> 重复写 1000 次——但每次写都是<strong>无状态、无锁</strong>的 <code>fs.appendFile</code>，进程崩了也不会留下半行残缺数据。</td>
+</tr>
+<tr>
+<td><strong>compaction 不删旧数据</strong></td>
+<td>文件只增不减，通过 <code>compact_boundary</code> 在<strong>读取时</strong>跳过旧历史。这换来两个保证：(1) <strong>崩溃安全</strong>——即使压缩过程中进程死掉，已写入的数据仍完整可用；(2) <strong>历史可重放</strong>——未来如果换一种压缩策略，可以基于 JSONL 重做，不用搬数据。</td>
+</tr>
+<tr>
+<td><strong>元数据重复 re-append</strong></td>
+<td>在 compact 前后和退出时，把 <code>custom-title</code>、<code>tag</code>、<code>last-prompt</code> 等重新刷到文件尾部，确保它们落在 <code>readLiteMetadata</code> 扫描的 tail 窗口（约 16KB）内，否则 resume 列表会看不到。这是<strong>"读取速度"和"写入冗余"之间的故意倾斜</strong>——picker 必须秒开。</td>
+</tr>
+</tbody>
+</table>
+
+<p>把这三个权衡反过来看，就是 Anthropic 这套 session 设计的核心命题：</p>
+
+<blockquote class="tip"><strong>磁盘很便宜，进程很脆弱，未来很不确定。所以——文件越笨越好（只 append），harness 越聪明越好（任意压缩、裁剪、重组），两者之间用 JSONL 这层简单格式划清边界。</strong></blockquote>
+
+<p>这正好回到开头那两句话。harness 是会变的——崩溃换进程、升级换版本、换代换实现、改 prompt 换组装方式——所有这些"变"都被关在 harness 边界内；JSONL 是不变的，append 进去的事件永远在那里、什么都不删。<strong>把"会变"和"不变"用一份 append-only 文件干净切开，是 Anthropic 这套设计最核心的一刀。</strong></p>
+
+<hr>
+
+<h3>参考资料</h3>
+<ul>
+  <li><a href="https://www.anthropic.com/engineering/managed-agents" target="_blank">Managed Agents — Anthropic Engineering</a>（"session as context object"、"cattle not pets" 等概念出处）</li>
+  <li>仓库相关代码：<code>src/utils/sessionStorage.ts</code>、<code>src/screens/REPL.tsx</code>、<code>src/query.ts</code>、<code>src/QueryEngine.ts</code>、<code>src/utils/messages.ts</code></li>
+</ul>
+
+</body>
+</html>
