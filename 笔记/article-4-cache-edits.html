@@ -258,14 +258,14 @@
 
   <!-- prefix break marker -->
   <line x1="259" y1="184" x2="259" y2="248" stroke="#dc2626" stroke-width="1.5" stroke-dasharray="2 2"/>
-  <text x="259" y="258" text-anchor="middle" class="smc" fill="#dc2626">▲ prefix 从此处起改变</text>
+  <text x="253" y="258" class="smc" fill="#dc2626">▲ prefix 从此处起改变</text>
 
   <rect x="468" y="192" width="240" height="48" fill="#fee2e2" stroke="#dc2626" rx="3"/>
   <text x="588" y="220" text-anchor="middle" class="lblc" fill="#7f1d1d">C 被迫重新写入 cache</text>
 
   <text x="720" y="221" class="smc" fill="#dc2626">cache miss</text>
 
-  <text x="50" y="282" class="smc">即"清空内容"也算改 prefix——任何字节级改动都会让 cache 从该点起失效。这是 microcompactMessages 的冷路径，仅当距上次响应超 60 分钟（cache 已凉）时才会走。</text>
+  <text x="50" y="282" class="smc">即"清空内容"也算改 prefix——任何字节级改动都让 cache 从该点起失效；仅在 cache 已凉（&gt;60 分钟）时才走此冷路径。</text>
 
   <!-- ============ 下：cache_edits ============ -->
   <text x="50" y="320" class="ttlc" fill="#15803d">cache_edits：客户端原文照发，附一份"删除清单"让服务端丢掉 B 内的 tool_result → 仍命中</text>
