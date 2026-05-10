@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Claude Code cache_edits 拆解：实际上下文低、逻辑上下文长，怎么做到的？</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+    max-width: 860px;
+    margin: 40px auto;
+    padding: 0 24px 80px;
+    color: #1f2328;
+    line-height: 1.78;
+    font-size: 16px;
+    background: #fff;
+  }
+  h1 {
+    font-size: 26px;
+    line-height: 1.45;
+    border-bottom: 2px solid #1f2328;
+    padding-bottom: 14px;
+    margin-bottom: 28px;
+  }
+  h2 {
+    font-size: 21px;
+    margin-top: 44px;
+    border-left: 4px solid #2563eb;
+    padding-left: 12px;
+    line-height: 1.45;
+  }
+  h3 {
+    font-size: 17px;
+    margin-top: 30px;
+    color: #111;
+  }
+  h4 {
+    font-size: 15px;
+    margin-top: 20px;
+    color: #374151;
+  }
+  p { margin: 12px 0; }
+  code {
+    background: #f4f4f5;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: "SF Mono", Monaco, Consolas, "Courier New", monospace;
+    font-size: 13.5px;
+    color: #be185d;
+  }
+  pre {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 14px 18px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  pre code {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+  }
+  table {
+    border-collapse: collapse;
+    margin: 18px 0;
+    width: 100%;
+    font-size: 14px;
+  }
+  th, td {
+    border: 1px solid #d4d4d8;
+    padding: 8px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: #f4f4f5; font-weight: 600; }
+  blockquote {
+    border-left: 4px solid #fbbf24;
+    background: #fffbeb;
+    margin: 18px 0;
+    padding: 12px 18px;
+    color: #78350f;
+  }
+  blockquote.tip {
+    border-left-color: #2563eb;
+    background: #eff6ff;
+    color: #1e3a8a;
+  }
+  blockquote.warn {
+    border-left-color: #ef4444;
+    background: #fef2f2;
+    color: #7f1d1d;
+  }
+  blockquote.fact {
+    border-left-color: #16a34a;
+    background: #f0fdf4;
+    color: #14532d;
+  }
+  blockquote.guess {
+    border-left-color: #9333ea;
+    background: #faf5ff;
+    color: #581c87;
+  }
+  .figure { margin: 28px 0; text-align: center; }
+  .figure-caption {
+    font-size: 13px;
+    color: #6b7280;
+    margin-top: 8px;
+    font-style: italic;
+  }
+  ul, ol { padding-left: 26px; }
+  li { margin: 6px 0; }
+  hr { border: none; border-top: 1px solid #e5e7eb; margin: 36px 0; }
+  .punchline {
+    background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+    border-left: 5px solid #d97706;
+    padding: 16px 20px;
+    margin: 24px 0;
+    font-size: 17px;
+    line-height: 1.7;
+    border-radius: 4px;
+  }
+  .badge-fact {
+    display: inline-block;
+    background: #dcfce7;
+    color: #14532d;
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    margin-left: 6px;
+    font-weight: 600;
+  }
+  .badge-guess {
+    display: inline-block;
+    background: #f3e8ff;
+    color: #6b21a8;
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    margin-left: 6px;
+    font-weight: 600;
+  }
+</style>
+</head>
+<body>
+
+<h1>Claude Code cache_edits 拆解：一种不破 cache、不重算 KV 的上下文压缩</h1>
+
+<p>Agent loop 跑久了都会撞同一个问题：上下文越拉越长，每多一个旧 tool_result 都在持续吃 attention 成本（attention 复杂度 O(N) per token），而且最终会撞到 context 上限。Claude Code 仓库里围着这个问题堆了一摞压缩手段：<code>snipCompactIfNeeded</code>、<code>autocompact</code>、<code>contextCollapse</code>、<code>microcompactMessages</code>……</p>
+
+<p>其中专门治理"旧 tool_result 太占上下文"的是 <code>microcompactMessages</code>。它有<strong>冷热两条路径</strong>：</p>
+
+<ul>
+  <li><strong>冷路径</strong>：距上次 assistant 消息超过 60 分钟、cache 已经凉。这时候直接把较老的 tool_result 的 content 字段就地置成 <code>[Old tool result content cleared]</code> 占位符，只保留最近 5 条。这条路径粗暴但简单——反正 cache 都凉了，重算就重算。</li>
+  <li><strong>热路径</strong>：cache 还热的时候要干完全相同的事——把旧 tool_result 从模型有效上下文里拿走——但不愿意付冷路径那两笔代价（破 prefix hash、被删内容彻底消失）。这条热路径的实现就是本文要拆的 <code>cache_edits</code>。</li>
+</ul>
+
+<p>cache_edits 想拿到的事情其实挺尖锐：在 cache 还热的场景里压缩上下文，同时<strong>既不破 prompt cache 的 prefix hash、也不让被删除的内容彻底从模型那里消失</strong>。这两件事普通压缩方案二选一已经不容易，cache_edits 试图两个都要。它怎么做到的，就是这篇文章要展开的内容。</p>
+
+<blockquote class="warn"><strong>本文是一篇推测分析，不是权威说明。</strong>cache_edits 不在 Anthropic 公开文档里。我们能看到的是：(1) Claude Code 反编译代码里完整的客户端骨架；(2) 代码里一段提到内部服务栈 "Mycro / page_manager" 的注释；(3) 一些 Reddit 逆向帖和社区分析。从这些线索能拼出"最可能的实现形态"，但<strong>没法确认细节</strong>——尤其是服务端那一层（§4 §5）很大程度上是合理外推。文章里每段都会标 <span class="badge-fact">代码已证实</span> 或 <span class="badge-guess">合理推测</span>，请按这个标签对待。如果你了解更多事实、或对推测有不同看法，非常欢迎在评论区指正。</blockquote>
+
+<p>本文要做的：</p>
+
+<ol>
+  <li>先把冷路径要付的两笔代价讲清（§1）——这是 cache_edits 存在动机的全部；</li>
+  <li>从代码里钉死客户端骨架和生命周期（§2 §3）；</li>
+  <li>顺着代码注释拼出服务端最可能的实现（§4）；</li>
+  <li>讲清核心机制：为什么 cache_edits 既能不重算 KV，又能让被删除的部分通过 C 的 K/V 隐式留下影响（§5）；</li>
+  <li>最后讨论这套机制为什么只能是 first-party，以及如果它真按推测的方式工作，对 Anthropic 意味着什么（§6 §7）。</li>
+</ol>
+
+<hr>
+
+<h2>一、冷路径在做同一件事，但代价限制了它只能在 cache 凉时启用</h2>
+
+<p>先看冷路径具体怎么干。<code>microcompactMessages</code> 冷路径的核心动作很直接：把较老的 tool_result 的 content 字段就地置成 <code>[Old tool result content cleared]</code>，结构（block 类型、tool_use_id 等）保留，最近 5 条不动。这个改动直接作用在 messages 数组本身——下一次请求发出去的 messages 里，那些 tool_result 的 content 真就是占位符了。</p>
+
+<p>这个简单动作干完之后会付两笔代价：</p>
+
+<p><strong>代价 1：prefix hash 从第一处改动起破了。</strong>Anthropic 官方 prompt cache 是 prefix hash 命中——从 messages 头部到 cache breakpoint 整段做哈希，前缀只要变一个字节，从那点之后整段缓存全废。"清空 content" 也是改字节，cache miss 不可避免。服务端要把后面所有内容重新跑一遍 prefill 算 KV——在 100K+ 的长 session 上，这一次重算的开销远超被压掉那几个 tool_result 节省的 attention 成本。</p>
+
+<p><strong>代价 2：被压缩部分的"影响"也跟着消失了。</strong>这一点比代价 1 更关键，但容易被忽略。模型重新 prefill 的时候，看到的 messages 是 A · [placeholder] · C 的纯文本——服务端会重新算每个 token 的 K/V。重算 C 的 K/V 用的是 "C 看不见 B" 的语境（C 前面的 content 已经是 placeholder 了），原本 C 的 K/V 里凝固着的"我看过 B 时形成的判断"全部丢失。从模型角度，B 不只是从 attention 范围里消失了，连 B 当时对 C 的影响痕迹都被抹掉。这一点为什么重要、cache_edits 怎么避开它，§5 会展开讲。</p>
+
+<p>这两笔账一加起来，冷路径的触发条件就很明确：<strong>必须等 cache 已经凉了（距上次响应 &gt; 60 分钟）才启用</strong>。反正 cache 都凉了，代价 1 不可避免，索性把 messages 也清理一下；代价 2 在长间隔后也没那么要紧（用户可能换了任务）。冷路径是"反正都要付代价了，索性清干净"的兜底方案。</p>
+
+<p>但 cache 还热的场景下旧 tool_result 同样在堆积——长 session 经常在几分钟内连续工作，cache 一直热着，旧 tool_result 又确实在持续吃上下文。这时候按冷路径的方式去清就太亏了：为了压几个 tool_result 把整段 KV cache 都打掉。<strong>cache_edits 就是为这个场景设计的</strong>——同样要把旧 tool_result 从模型有效上下文里拿走，但既不改 messages（不破 prefix hash）、也不让 C 失去被 B 影响过的痕迹（不重算 KV）。</p>
+
+<p>下面这张图先在 messages / cache 字节层面对比两条路径，§5 再回到 KV 内部讲清"为什么 C 不会失去 B 的影响"。</p>
+
+<div class="figure">
+<svg width="820" height="540" viewBox="0 0 820 540" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .ttlc { font: bold 14px -apple-system, sans-serif; fill: #111; }
+    .lblc { font: 12.5px -apple-system, sans-serif; fill: #1f2328; }
+    .smc { font: 11px -apple-system, sans-serif; fill: #6b7280; }
+    .miniLbl { font: 10px -apple-system, sans-serif; fill: #1f2328; }
+  </style>
+
+  <text x="410" y="22" text-anchor="middle" class="ttlc" font-size="15">microcompactMessages 两条路径：在 messages / cache 字节层面看差别</text>
+
+  <!-- ============ 上：原始 ============ -->
+  <text x="50" y="60" class="ttlc" fill="#1e40af">原始：A · 中段历史（B 区段）· C  → 完整命中</text>
+
+  <!-- A -->
+  <rect x="50" y="74" width="100" height="48" fill="#dcfce7" stroke="#16a34a" rx="3"/>
+  <text x="100" y="96" text-anchor="middle" class="lblc">A</text>
+  <text x="100" y="112" text-anchor="middle" class="smc">system + 早期</text>
+
+  <!-- B 区段：6 个 mini-block 显示混合内容 -->
+  <rect x="160" y="74" width="48" height="48" fill="#e0e7ff" stroke="#6366f1" rx="2"/>
+  <text x="184" y="94" text-anchor="middle" class="miniLbl">text</text>
+  <text x="184" y="108" text-anchor="middle" class="miniLbl">/think</text>
+  <rect x="210" y="74" width="48" height="48" fill="#fed7aa" stroke="#ea580c" rx="2"/>
+  <text x="234" y="102" text-anchor="middle" class="miniLbl">tool_use</text>
+  <rect x="260" y="74" width="48" height="48" fill="#fecaca" stroke="#ef4444" rx="2"/>
+  <text x="284" y="98" text-anchor="middle" class="miniLbl">tool_</text>
+  <text x="284" y="112" text-anchor="middle" class="miniLbl">result</text>
+  <rect x="310" y="74" width="48" height="48" fill="#e0e7ff" stroke="#6366f1" rx="2"/>
+  <text x="334" y="102" text-anchor="middle" class="miniLbl">text</text>
+  <rect x="360" y="74" width="48" height="48" fill="#fed7aa" stroke="#ea580c" rx="2"/>
+  <text x="384" y="102" text-anchor="middle" class="miniLbl">tool_use</text>
+  <rect x="410" y="74" width="48" height="48" fill="#fecaca" stroke="#ef4444" rx="2"/>
+  <text x="434" y="98" text-anchor="middle" class="miniLbl">tool_</text>
+  <text x="434" y="112" text-anchor="middle" class="miniLbl">result</text>
+
+  <!-- C -->
+  <rect x="468" y="74" width="240" height="48" fill="#fef3c7" stroke="#d97706" rx="3"/>
+  <text x="588" y="96" text-anchor="middle" class="lblc">C · assistant 已基于 B 形成的状态</text>
+  <text x="588" y="112" text-anchor="middle" class="smc">（结论 / 计划 / 改动文件）</text>
+
+  <text x="720" y="103" class="smc" fill="#16a34a">cache hit</text>
+
+  <!-- B 区段说明放在行下方 -->
+  <text x="309" y="140" text-anchor="middle" class="smc">B 区段：reasoning · text · tool_use · tool_result 混合（多轮）</text>
+
+  <!-- ============ 中：朴素 (cold path: 内容置空) ============ -->
+  <text x="50" y="178" class="ttlc" fill="#7f1d1d">朴素做法（冷路径）：原地把老 tool_result 内容清空，结构保留 → cache 从第一处清空开始破</text>
+
+  <rect x="50" y="192" width="100" height="48" fill="#dcfce7" stroke="#16a34a" rx="3"/>
+  <text x="100" y="220" text-anchor="middle" class="lblc">A</text>
+
+  <!-- B 区段：text/tool_use 保留，tool_result 内容被替换为占位符 -->
+  <rect x="160" y="192" width="48" height="48" fill="#e0e7ff" stroke="#6366f1" rx="2"/>
+  <text x="184" y="212" text-anchor="middle" class="miniLbl">text</text>
+  <text x="184" y="226" text-anchor="middle" class="miniLbl">/think</text>
+  <rect x="210" y="192" width="48" height="48" fill="#fed7aa" stroke="#ea580c" rx="2"/>
+  <text x="234" y="220" text-anchor="middle" class="miniLbl">tool_use</text>
+  <!-- 第一处清空：prefix 在这里破 -->
+  <rect x="260" y="192" width="48" height="48" fill="#fee2e2" stroke="#dc2626" stroke-dasharray="3 2" rx="2"/>
+  <text x="284" y="214" text-anchor="middle" class="miniLbl" fill="#7f1d1d">[cleared]</text>
+  <text x="284" y="228" text-anchor="middle" class="miniLbl" fill="#7f1d1d">占位符</text>
+  <rect x="310" y="192" width="48" height="48" fill="#fee2e2" stroke="#dc2626" rx="2"/>
+  <text x="334" y="220" text-anchor="middle" class="miniLbl" fill="#7f1d1d">text</text>
+  <rect x="360" y="192" width="48" height="48" fill="#fee2e2" stroke="#dc2626" rx="2"/>
+  <text x="384" y="220" text-anchor="middle" class="miniLbl" fill="#7f1d1d">tool_use</text>
+  <rect x="410" y="192" width="48" height="48" fill="#fee2e2" stroke="#dc2626" stroke-dasharray="3 2" rx="2"/>
+  <text x="434" y="214" text-anchor="middle" class="miniLbl" fill="#7f1d1d">[cleared]</text>
+
+  <!-- prefix break marker -->
+  <line x1="259" y1="184" x2="259" y2="248" stroke="#dc2626" stroke-width="1.5" stroke-dasharray="2 2"/>
+  <text x="259" y="258" text-anchor="middle" class="smc" fill="#dc2626">▲ prefix 从此处起改变</text>
+
+  <rect x="468" y="192" width="240" height="48" fill="#fee2e2" stroke="#dc2626" rx="3"/>
+  <text x="588" y="220" text-anchor="middle" class="lblc" fill="#7f1d1d">C 被迫重新写入 cache</text>
+
+  <text x="720" y="221" class="smc" fill="#dc2626">cache miss</text>
+
+  <text x="50" y="282" class="smc">即"清空内容"也算改 prefix——任何字节级改动都会让 cache 从该点起失效。这是 microcompactMessages 的冷路径，仅当距上次响应超 60 分钟（cache 已凉）时才会走。</text>
+
+  <!-- ============ 下：cache_edits ============ -->
+  <text x="50" y="320" class="ttlc" fill="#15803d">cache_edits：客户端原文照发，附一份"删除清单"让服务端丢掉 B 内的 tool_result → 仍命中</text>
+
+  <rect x="50" y="334" width="100" height="48" fill="#dcfce7" stroke="#16a34a" rx="3"/>
+  <text x="100" y="362" text-anchor="middle" class="lblc">A</text>
+
+  <!-- B 区段：保留 text/tool_use，只标 tool_result 为服务端删除 -->
+  <rect x="160" y="334" width="48" height="48" fill="#e0e7ff" stroke="#6366f1" rx="2"/>
+  <text x="184" y="354" text-anchor="middle" class="miniLbl">text</text>
+  <text x="184" y="368" text-anchor="middle" class="miniLbl">/think</text>
+  <rect x="210" y="334" width="48" height="48" fill="#fed7aa" stroke="#ea580c" rx="2"/>
+  <text x="234" y="362" text-anchor="middle" class="miniLbl">tool_use</text>
+  <rect x="260" y="334" width="48" height="48" fill="#f3e8ff" stroke="#9333ea" stroke-dasharray="3 2" rx="2"/>
+  <text x="284" y="358" text-anchor="middle" class="miniLbl" fill="#581c87">tool_</text>
+  <text x="284" y="372" text-anchor="middle" class="miniLbl" fill="#581c87">result ✗</text>
+  <rect x="310" y="334" width="48" height="48" fill="#e0e7ff" stroke="#6366f1" rx="2"/>
+  <text x="334" y="362" text-anchor="middle" class="miniLbl">text</text>
+  <rect x="360" y="334" width="48" height="48" fill="#fed7aa" stroke="#ea580c" rx="2"/>
+  <text x="384" y="362" text-anchor="middle" class="miniLbl">tool_use</text>
+  <rect x="410" y="334" width="48" height="48" fill="#f3e8ff" stroke="#9333ea" stroke-dasharray="3 2" rx="2"/>
+  <text x="434" y="358" text-anchor="middle" class="miniLbl" fill="#581c87">tool_</text>
+  <text x="434" y="372" text-anchor="middle" class="miniLbl" fill="#581c87">result ✗</text>
+
+  <rect x="468" y="334" width="240" height="48" fill="#dcfce7" stroke="#16a34a" rx="3"/>
+  <text x="588" y="356" text-anchor="middle" class="lblc">C 仍然在 cache 里</text>
+  <text x="588" y="372" text-anchor="middle" class="smc">（已吸收过 B 内 tool_result 的内容）</text>
+
+  <text x="720" y="363" class="smc" fill="#16a34a">cache hit</text>
+
+  <text x="309" y="400" text-anchor="middle" class="smc" fill="#581c87">客户端发送的字节完全不变，只有 tool_result 在服务端被标记释放（紫色虚线）</text>
+
+  <!-- ============ 图例 ============ -->
+  <text x="50" y="445" class="ttlc" font-size="12">图例（B 区段内的 mini-block 类型）</text>
+
+  <rect x="60" y="458" width="14" height="14" fill="#e0e7ff" stroke="#6366f1"/>
+  <text x="80" y="470" class="smc">text / thinking</text>
+
+  <rect x="190" y="458" width="14" height="14" fill="#fed7aa" stroke="#ea580c"/>
+  <text x="210" y="470" class="smc">tool_use</text>
+
+  <rect x="290" y="458" width="14" height="14" fill="#fecaca" stroke="#ef4444"/>
+  <text x="310" y="470" class="smc">tool_result（cache_edits 的删除目标）</text>
+
+  <rect x="540" y="458" width="14" height="14" fill="#f3e8ff" stroke="#9333ea" stroke-dasharray="3 2"/>
+  <text x="560" y="470" class="smc">服务端标记释放（不改请求字节）</text>
+
+  <text x="50" y="498" class="smc">⚠ B 区段为示意：图中只画 6 个 mini-block，真实长会话里通常是数十轮、几百块。</text>
+  <text x="50" y="518" class="smc">⚠ "C 已吸收过 B"是基于 attention 的合理推测，具体保留多少取决于 C 写入时模型实际用了多少 B 的内容，详见 §5。</text>
+
+</svg>
+<div class="figure-caption">图 1：冷路径 vs cache_edits 在 messages 字节和 cache 命中状态上的对比。冷路径改的是请求体（即便只是把内容置空），prefix 从第一处变动起就破；cache_edits 不改请求体一个字节，只附一份"删除清单"让服务端按 cache_reference 释放对应 KV。</div>
+</div>
+
+<p>用一句话总结这层差别：<strong>冷路径改的是"客户端要发的内容"；cache_edits 改的是"服务端 cache 的有效视图"</strong>。</p>
+
+<p>客户端原始消息里 A · B · C 三段一字不少都在（包括 B 内所有 reasoning、text、tool_use、tool_result），cache prefix hash 仍然命中——只是 B 内被标了 <code>cache_reference</code> 的 tool_result 在服务端被打了"释放标记"，对应的 KV page 被回收，模型后续 attention 不再读它们。<strong>所以"删 B"是简化说法，准确表述是"只删 B 内的 tool_result"</strong>——下文涉及 KV / page 的讨论也按这个口径。</p>
+
+<p>这就是 cache_edits 在请求层面的核心动作：<strong>把"想压缩的内容"和"要发的请求体"解耦</strong>——客户端继续发完整 prefix（cache 命中），同时附一份精确到具体 tool_result 引用的"删除指令清单"。但请求层面的差别只是表象——为什么这样做能避开冷路径"代价 2（C 失去 B 的影响）"，要看到 KV cache 内部才能讲清，§5 展开。</p>
+
+<hr>
+
+<h2>二、骨架：从代码里钉死的事实 <span class="badge-fact">代码已证实</span></h2>
+
+<p>看 cache_edits 怎么做到 §1 末尾承诺的那两件事——不改 messages、不重算 KV。下面这些不是推测，是 <code>src/services/api/claude.ts</code> 和 <code>src/services/compact/microCompact.ts</code> 里能直接读到的形状：</p>
+
+<h3>2.1 客户端会给 tool_result 补 <code>cache_reference</code> 字段</h3>
+
+<p>在 <code>addCacheBreakpoints()</code> 里，对所有<strong>位于最后一个 cache_control marker 之前</strong>的 tool_result，会补一个 <code>cache_reference</code> 字段，值就是 <code>tool_use_id</code>：</p>
+
+<pre><code>// claude.ts · addCacheBreakpoints
+if (block && isToolResultBlock(block)) {
+  msg.content[j] = Object.assign({}, block, {
+    cache_reference: block.tool_use_id,
+  })
+}</code></pre>
+
+<p>关键事实：<strong>这是无条件给整个 cached prefix 里所有 tool_result 都加</strong>，不是只给"想删的"加。这意味着客户端事先不知道哪些会被删，先给所有可能被引用的 block 标好"引用键"，等触发时再决定删哪些。</p>
+
+<h3>2.2 cache_edits block 的精确形状</h3>
+
+<p>同一文件里能找到类型定义：</p>
+
+<pre><code>// claude.ts
+type CachedMCEditsBlock = {
+  type: 'cache_edits'
+  edits: { type: 'delete'; cache_reference: string }[]
+}</code></pre>
+
+<p>这是一个<strong>新的 content block 类型</strong>——和 <code>text</code>、<code>tool_use</code>、<code>tool_result</code> 平级——里面装一组 <code>{type: 'delete', cache_reference: ...}</code> 删除指令。</p>
+
+<h3>2.3 cache_edits block 插在哪里</h3>
+
+<p><code>insertBlockAfterToolResults</code> 这个名字已经把规则写明：插入到<strong>最后一条 user message 的 content array 里、tool_result 块之后</strong>。所以请求体长这样：</p>
+
+<pre><code>messages: [
+  { role: 'user',      content: [{ type: 'text', text: '初始任务...' }] },
+  { role: 'assistant', content: [{ type: 'tool_use', id: 'tu-001', ... }] },
+  { role: 'user',      content: [
+      { type: 'tool_result', tool_use_id: 'tu-001', cache_reference: 'tu-001', content: '...' }
+  ]},
+  // ... 中间 30 轮 ...
+  { role: 'user',      content: [
+      { type: 'tool_result', tool_use_id: 'tu-040', cache_reference: 'tu-040', content: '...' },
+      // ↓↓↓ 删除指令插在这里 ↓↓↓
+      { type: 'cache_edits', edits: [
+          { type: 'delete', cache_reference: 'tu-001' },
+          { type: 'delete', cache_reference: 'tu-005' },
+          { type: 'delete', cache_reference: 'tu-012' }
+      ]}
+  ]},
+]</code></pre>
+
+<h3>2.4 触发条件：count-based threshold</h3>
+
+<p><code>cachedMicrocompact.ts</code> 里的状态机：</p>
+
+<pre><code>type CachedMCState = {
+  registeredTools: Set&lt;string&gt;     // 已登记的 tool_use_id
+  toolOrder: string[]               // 出现顺序
+  deletedRefs: Set&lt;string&gt;          // 已删除的引用
+  pinnedEdits: PinnedCacheEdits[]   // 已 pin 的 cache_edits 块
+  toolsSentToAPI: boolean
+}</code></pre>
+
+<p>每轮 query 前扫描 messages、注册新 tool_result。当：</p>
+
+<pre><code>活跃数 = toolOrder.length - deletedRefs.size
+活跃数 &gt; triggerThreshold ?</code></pre>
+
+<p>满足时，调 <code>getToolResultsToDelete(state)</code> 选出最老的一批，调 <code>createCacheEditsBlock(state, toolIds)</code> 生成 cache_edits block。<code>triggerThreshold</code> 和 <code>keepRecent</code> 都来自 GrowthBook 远程配置——这意味着 Anthropic 可以线上调参而不发版。</p>
+
+<h3>2.5 pin / consume 模式：删除指令要在每轮重发</h3>
+
+<p>这是最反直觉、也最关键的一点。<code>microCompact.ts</code> 暴露三个 API：</p>
+
+<pre><code>// microCompact.ts
+export function consumePendingCacheEdits(): CacheEditsBlock | null
+export function getPinnedCacheEdits(): PinnedCacheEdits[]
+export function pinCacheEdits(userMessageIndex: number, block: CacheEditsBlock): void</code></pre>
+
+<p>流程：</p>
+
+<ol>
+  <li>本轮 microcompact 决定要删 [tu-001, tu-005, tu-012] → 生成新 <code>cache_edits</code> block 放进 <code>pendingCacheEdits</code></li>
+  <li>下一次 API 请求构造时，<code>consumePendingCacheEdits()</code> 取出（且清空 pending）+ <code>getPinnedCacheEdits()</code> 取所有以前 pin 过的</li>
+  <li><strong>新的 + 所有以前 pin 过的</strong> 都插入到对应位置的 user message 里</li>
+  <li>新的这一批 <code>pinCacheEdits()</code> 注册到 state，<strong>之后每一轮都要在<em>同一位置</em>重发</strong></li>
+</ol>
+
+<p>为什么要重发？<strong>因为客户端发的是完整 prefix（A B C），不重发删除指令的话，服务端没办法知道还要删 B</strong>——服务端的"已删除"状态不是持久存的，而是<em>每次请求里</em>由客户端的 cache_edits 列表声明出来的。换句话说：</p>
+
+<blockquote class="fact"><strong>cache_edits 是 declarative 的"本次请求里希望生效的删除集合"，不是 imperative 的"执行一次删除操作"。</strong>每次请求都要把所有想生效的删除全列出来。这也意味着 pin 列表是单调增长的——除非显式把某些删除"撤回"。</blockquote>
+
+<h3>2.6 真实响应字段：<code>cache_deleted_input_tokens</code></h3>
+
+<p>API 响应的 <code>usage</code> 对象里多了一个字段，<code>sdkUtilityTypes.ts:22</code> 和 <code>claude.ts</code> 里多处使用：</p>
+
+<pre><code>cache_deleted_input_tokens?: number</code></pre>
+
+<p>这是服务端告诉客户端"这次请求实际删除了多少 token"——可以用来做账、可以用来更新 token 预算。<code>microCompact.ts</code> 还会捕一个 <code>baselineCacheDeletedTokens</code>，记录上一次响应里的累计值，用差值算本次操作的实际收益。</p>
+
+<hr>
+
+<h2>三、完整生命周期 <span class="badge-fact">代码已证实</span></h2>
+
+<div class="figure">
+<svg width="820" height="540" viewBox="0 0 820 540" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .ttll { font: bold 14px -apple-system, sans-serif; fill: #111; }
+    .lbll { font: 12.5px -apple-system, sans-serif; fill: #1f2328; }
+    .sml { font: 11px -apple-system, sans-serif; fill: #6b7280; }
+    .pn { font: bold 13px -apple-system, sans-serif; fill: #fff; }
+    .ph { font: bold 12px -apple-system, sans-serif; fill: #1e40af; }
+  </style>
+  <defs>
+    <marker id="arrl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <text x="410" y="22" text-anchor="middle" class="ttll" font-size="15">cache_edits 完整生命周期：4 个阶段</text>
+
+  <!-- Phase 1 -->
+  <rect x="40" y="50" width="740" height="100" fill="#eff6ff" stroke="#2563eb" rx="6"/>
+  <circle cx="65" cy="74" r="14" fill="#2563eb"/>
+  <text x="65" y="79" text-anchor="middle" class="pn">1</text>
+  <text x="92" y="79" class="ph">标注阶段（每次请求都做）</text>
+  <text x="60" y="104" class="lbll">→ addCacheBreakpoints() 给 cached prefix 内所有 tool_result 加 cache_reference: tool_use_id</text>
+  <text x="60" y="124" class="lbll">→ 这一步对"还没要被删"的也做，预先标好引用键</text>
+  <text x="60" y="142" class="sml">代码位置：claude.ts · addCacheBreakpoints()</text>
+
+  <!-- Phase 2 -->
+  <rect x="40" y="170" width="740" height="120" fill="#fffbeb" stroke="#d97706" rx="6"/>
+  <circle cx="65" cy="194" r="14" fill="#d97706"/>
+  <text x="65" y="199" text-anchor="middle" class="pn">2</text>
+  <text x="92" y="199" class="ph" fill="#92400e">触发判定（每次 query 前）</text>
+  <text x="60" y="224" class="lbll">→ 扫描 messages，把新出现的 compactable tool_result 注册到 state</text>
+  <text x="60" y="244" class="lbll">→ 计算 活跃数 = toolOrder.length - deletedRefs.size</text>
+  <text x="60" y="264" class="lbll">→ 若 活跃数 &gt; triggerThreshold，挑最老的几个生成 cache_edits block 放入 pending</text>
+  <text x="60" y="282" class="sml">代码位置：microCompact.ts · cachedMicrocompactPath()</text>
+
+  <!-- Phase 3 -->
+  <rect x="40" y="310" width="740" height="120" fill="#f0fdf4" stroke="#16a34a" rx="6"/>
+  <circle cx="65" cy="334" r="14" fill="#16a34a"/>
+  <text x="65" y="339" text-anchor="middle" class="pn">3</text>
+  <text x="92" y="339" class="ph" fill="#15803d">注入与 pin（构造 API 请求时）</text>
+  <text x="60" y="364" class="lbll">→ consumePendingCacheEdits() 拿本轮新的 + getPinnedCacheEdits() 拿所有历史的</text>
+  <text x="60" y="384" class="lbll">→ insertBlockAfterToolResults() 插到最后一条 user message 里</text>
+  <text x="60" y="404" class="lbll" font-weight="bold">→ 新的那批调 pinCacheEdits() 注册：之后每一轮都在同一 user message 位置重发</text>
+  <text x="60" y="422" class="sml">代码位置：claude.ts · addCacheBreakpoints() · microCompact.ts · pin/consume API</text>
+
+  <!-- Phase 4 -->
+  <rect x="40" y="450" width="740" height="80" fill="#f3e8ff" stroke="#9333ea" rx="6"/>
+  <circle cx="65" cy="474" r="14" fill="#9333ea"/>
+  <text x="65" y="479" text-anchor="middle" class="pn">4</text>
+  <text x="92" y="479" class="ph" fill="#581c87">服务端响应反馈（API 返回时）</text>
+  <text x="60" y="504" class="lbll">→ 响应 usage.cache_deleted_input_tokens 报告本次请求里实际生效的删除 token 数</text>
+  <text x="60" y="522" class="sml">代码位置：claude.ts · streamHandler · sdkUtilityTypes.ts</text>
+</svg>
+<div class="figure-caption">图 2：cache_edits 的完整生命周期。客户端做 4 件事（标注 / 触发 / 注入 + pin / 接响应），服务端做的事在最后一节展开。</div>
+</div>
+
+<p>这里有一个隐含但很重要的不变量——<strong>已经 pin 过的 cache_edits 必须每次 request 在同一位置重发</strong>。<code>addCacheBreakpoints</code> 里这段处理：</p>
+
+<pre><code>// 重新插入所有先前 pin 过的 cache_edits 到原来的位置
+for (const pinned of pinnedEdits ?? []) {
+  const msg = result[pinned.userMessageIndex]
+  if (msg && msg.role === 'user') {
+    insertBlockAfterToolResults(msg.content, dedupedBlock)
+  }
+}</code></pre>
+
+<p><code>userMessageIndex</code> 是相对 messages 数组的位置——意味着<strong>客户端要保证 messages 数组的索引在多次 request 之间不能错位</strong>。这又是另一条"prefix 稳定"的硬约束：你不能在前面塞新消息，否则 pin 索引就错了。</p>
+
+<hr>
+
+<h2>四、服务端实现：cache_edits 是已有 eviction 机制的反向入口 <span class="badge-fact">来自代码注释</span></h2>
+
+<p>前面三节讲清了客户端怎么标 cache_reference、怎么发 cache_edits。但客户端不改 messages 字节，"让模型看不到 B"这件事必然发生在服务端。这一节回答：服务端到底拿 cache_edits 的删除清单做了什么。</p>
+
+<p><code>claude.ts</code> 里 <code>addCacheBreakpoints</code> 函数有一段注释，原本讲的是"为什么只用一个 cache_control marker"，但顺带泄露了服务端机制：</p>
+
+<pre><code>// Exactly one message-level cache_control marker per request. Mycro's
+// turn-to-turn eviction (page_manager/index.rs: Index::insert) frees
+// local-attention KV pages at any cached prefix position NOT in
+// cache_store_int_token_boundaries. ...</code></pre>
+
+<p>读出来一个核心机制：<strong>Anthropic 服务端的 KV 缓存是按 page 管理的，每轮请求结束默认跑一次 eviction sweep——所有"位置不在 boundary 集合内"的 page 直接释放</strong>。<code>cache_control</code> marker 的作用是往 boundary 集合里加一个保护点，让对应 page 逃过这一轮的 evict。这里有个反直觉的点值得点出：</p>
+
+<ul>
+  <li><strong>常态是清，不是留</strong>——服务端默认每轮 evict 一切没受保护的 page，cache 能跨轮命中是因为 boundary 在保护它们。这和"prompt cache 默认会留内容、特殊操作才删"的直觉是反过来的。</li>
+  <li><strong>cache_control marker 是"保护标记"</strong>，不是"插入标记"——它告诉服务端"别 evict 这个位置的 page"，不是"把这个内容缓存起来"。</li>
+</ul>
+
+<p>有了这个心智模型，cache_edits 在服务端的角色就清楚了：</p>
+
+<blockquote class="fact"><strong>cache_edits 不是新协议，而是给已有的 page eviction 机制加了一个反向触发入口。</strong>原本只有一条触发路径——按 token 位置自动 evict（每轮跑、看 boundary）；cache_edits 加了第二条——按 cache_reference 主动 evict（客户端显式声明哪些 page 要释放）。底层调的还是同一个 page release 函数，page_manager 不变，attention kernel 不变；新增的工程量只是"cache_reference → page 集合"的索引 + 一个新的删除入口。</blockquote>
+
+<p>这一点对 §5 关键：<strong>cache_edits 在服务端"几乎不做什么"</strong>——既不动 attention 计算，也不重算任何 K/V，只是标记几个 page 为可释放。所以"压缩同时不重算 KV"这件事在工程上不是什么了不起的优化，而是 page_manager 这套已有架构上一个小小扩展自然带来的副产物。</p>
+
+<hr>
+
+<h2>五、核心机制：压缩同时不重算 KV，且 B 仍隐式留在 C 里 <span class="badge-guess">合理推测</span></h2>
+
+<p>到这里 §1 提的两个问题——"为什么 cache_edits 不破 prefix hash"、"为什么被删除的 B 不会让 C 失去影响"——前者已经讲清（不改 messages 字节、服务端 page 释放走另一条入口）；后者要看到 KV cache 内部才能讲清，这一节就讲这个。</p>
+
+<blockquote class="warn"><strong>本节先把问题做一次模型层面的抽象简化，再讨论。</strong>前面 §1–§4 讲的是真实形态：B 实际是<em>散落在多轮 user message 里、零零散散的几十上百个 tool_result</em>，中间夹着 text / thinking / tool_use；C 也不是单一一条消息，而是若干轮 assistant 累积出来的判断 / 计划 / 代码改动。本节为了讲清"prefill 时 K/V 怎么算出来"、"释放 B 的 page 之后 C 还剩什么"这几件事，把散点抽象成连续的 A·B·C 三段：<strong>A = 早期 prefix，B = 要释放的旧 tool_result（视为一段连续区域），C = 后段 assistant 状态</strong>。这个简化丢掉了 B 散布、夹杂 text/tool_use 等细节——现实里这些由 §4 的 boundary / page 粒度自行处理；本节只关心抽象后的 KV 几何。请把 A/B/C 当成讨论工具，不当成数据结构。</blockquote>
+
+<div class="figure">
+<svg width="880" height="720" viewBox="0 0 880 720" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .ttf { font: bold 14px -apple-system, sans-serif; fill: #111; }
+    .stf { font: bold 12.5px -apple-system, sans-serif; fill: #1f2328; }
+    .lbf { font: 12px -apple-system, sans-serif; fill: #1f2328; }
+    .smf { font: 10.5px -apple-system, sans-serif; fill: #6b7280; }
+    .kvf { font: 11px ui-monospace, monospace; fill: #1f2328; }
+    .kvh { font: bold 11px ui-monospace, monospace; fill: #111; }
+    .nt { font: 10.5px -apple-system, sans-serif; fill: #7f1d1d; }
+    .ng { font: 10.5px -apple-system, sans-serif; fill: #15803d; }
+  </style>
+  <defs>
+    <marker id="arr5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arr5r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#dc2626"/>
+    </marker>
+    <marker id="arr5g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#16a34a"/>
+    </marker>
+  </defs>
+
+  <text x="440" y="22" text-anchor="middle" class="ttf" font-size="15">cache_edits 与冷路径的根本差别在 KV cache 内部</text>
+
+  <!-- Stage 1 -->
+  <rect x="20" y="42" width="840" height="160" fill="#f8fafc" stroke="#cbd5e1" rx="6"/>
+  <text x="32" y="62" class="stf" fill="#1e40af">T0 · 原始 prefill（两条路径的共享起点）</text>
+  <rect x="60" y="78" width="120" height="38" fill="#dcfce7" stroke="#16a34a" rx="3"/>
+  <text x="120" y="102" text-anchor="middle" class="lbf">A</text>
+  <rect x="190" y="78" width="280" height="38" fill="#fecaca" stroke="#ef4444" rx="3"/>
+  <text x="330" y="102" text-anchor="middle" class="lbf">B（旧 tool_result）</text>
+  <rect x="480" y="78" width="200" height="38" fill="#fef3c7" stroke="#d97706" rx="3"/>
+  <text x="580" y="102" text-anchor="middle" class="lbf">C（assistant 状态）</text>
+  <line x1="60" y1="128" x2="680" y2="128" stroke="#475569" stroke-width="1" marker-end="url(#arr5)"/>
+  <text x="370" y="142" text-anchor="middle" class="smf">prefill 顺序：每个 token 的 K/V 由它本身 + 前面所有 token 共同算出</text>
+  <text x="32" y="170" class="kvh">服务端 KV cache:</text>
+  <rect x="155" y="158" width="60" height="22" fill="#dcfce7" stroke="#16a34a" rx="2"/>
+  <text x="185" y="173" text-anchor="middle" class="kvf">KV(A)</text>
+  <rect x="225" y="158" width="60" height="22" fill="#fecaca" stroke="#ef4444" rx="2"/>
+  <text x="255" y="173" text-anchor="middle" class="kvf">KV(B)</text>
+  <rect x="295" y="158" width="120" height="22" fill="#fef3c7" stroke="#d97706" rx="2"/>
+  <text x="355" y="173" text-anchor="middle" class="kvh">KV(C | A, B)</text>
+  <text x="430" y="173" class="smf" fill="#15803d">← 关键：C 的 K/V 在 prefill 时 attention 看得见 A 和 B</text>
+  <text x="430" y="190" class="smf" fill="#15803d">　　 B 的影响在这步被凝固进 C 的每个 K/V 向量里</text>
+
+  <!-- Stage 2 -->
+  <text x="440" y="232" text-anchor="middle" class="ttf" font-size="14">T1 · 触发压缩</text>
+
+  <rect x="20" y="246" width="410" height="220" fill="#fef2f2" stroke="#dc2626" rx="6"/>
+  <text x="32" y="266" class="stf" fill="#7f1d1d">冷路径（cache 已凉）</text>
+  <text x="32" y="290" class="lbf">① 改 messages（B 的 content 置空）：</text>
+  <rect x="40" y="298" width="60" height="28" fill="#dcfce7" stroke="#16a34a" rx="2"/>
+  <text x="70" y="316" text-anchor="middle" class="kvf">A</text>
+  <rect x="105" y="298" width="180" height="28" fill="#fee2e2" stroke="#dc2626" stroke-dasharray="3 2" rx="2"/>
+  <text x="195" y="316" text-anchor="middle" class="kvf" fill="#7f1d1d">[Old result cleared]</text>
+  <rect x="290" y="298" width="120" height="28" fill="#fef3c7" stroke="#d97706" rx="2"/>
+  <text x="350" y="316" text-anchor="middle" class="kvf">C 文本</text>
+  <text x="32" y="346" class="lbf" fill="#7f1d1d">② cache miss → 整段重新 prefill</text>
+  <text x="32" y="372" class="lbf">③ 重算后的 KV cache：</text>
+  <rect x="40" y="382" width="60" height="22" fill="#dcfce7" stroke="#16a34a" rx="2"/>
+  <text x="70" y="397" text-anchor="middle" class="kvf">KV(A)</text>
+  <rect x="105" y="382" width="100" height="22" fill="#fee2e2" stroke="#dc2626" stroke-dasharray="3 2" rx="2"/>
+  <text x="155" y="397" text-anchor="middle" class="kvf" fill="#7f1d1d">KV([cleared])</text>
+  <rect x="210" y="382" width="180" height="22" fill="#fef3c7" stroke="#d97706" rx="2"/>
+  <text x="300" y="397" text-anchor="middle" class="kvh" fill="#7f1d1d">KV(C | A, [cleared])</text>
+  <text x="32" y="427" class="nt">⚠ C 重算时 attention 看不见 B</text>
+  <text x="32" y="445" class="nt">　 KV(C | A, [cleared]) 里没有 B 的痕迹</text>
+  <text x="32" y="460" class="nt">　 B 当时对 C 的影响 → 全部丢失</text>
+
+  <rect x="450" y="246" width="410" height="220" fill="#f0fdf4" stroke="#16a34a" rx="6"/>
+  <text x="462" y="266" class="stf" fill="#15803d">cache_edits（cache 还热）</text>
+  <text x="462" y="290" class="lbf">① messages 一字不改：</text>
+  <rect x="470" y="298" width="60" height="28" fill="#dcfce7" stroke="#16a34a" rx="2"/>
+  <text x="500" y="316" text-anchor="middle" class="kvf">A</text>
+  <rect x="535" y="298" width="180" height="28" fill="#fecaca" stroke="#ef4444" rx="2"/>
+  <text x="625" y="316" text-anchor="middle" class="kvf">B（原文还在）</text>
+  <rect x="720" y="298" width="120" height="28" fill="#fef3c7" stroke="#d97706" rx="2"/>
+  <text x="780" y="316" text-anchor="middle" class="kvf">C 文本</text>
+  <text x="462" y="346" class="lbf" fill="#15803d">② cache hit + 附 cache_edits 删除清单</text>
+  <text x="478" y="362" class="smf">服务端按 cache_reference 释放 B 的 KV page</text>
+  <text x="462" y="384" class="lbf">③ 服务端 KV cache 状态：</text>
+  <rect x="470" y="394" width="60" height="22" fill="#dcfce7" stroke="#16a34a" rx="2"/>
+  <text x="500" y="409" text-anchor="middle" class="kvf">KV(A)</text>
+  <rect x="535" y="394" width="100" height="22" fill="#f3f4f6" stroke="#9ca3af" stroke-dasharray="3 2" rx="2"/>
+  <text x="585" y="409" text-anchor="middle" class="kvf" fill="#6b7280">[released]</text>
+  <rect x="640" y="394" width="200" height="22" fill="#fef3c7" stroke="#d97706" rx="2"/>
+  <text x="740" y="409" text-anchor="middle" class="kvh" fill="#15803d">KV(C | A, B) · T0 原值</text>
+  <text x="462" y="437" class="ng">✓ KV(A) 和 KV(C | A, B) 是 T0 算出来的，未重算</text>
+  <text x="462" y="453" class="ng">　 C 的每个 K/V 仍凝固着 prefill 时见过 B 的状态</text>
+  <text x="462" y="468" class="ng">　 B 当时对 C 的影响 → 隐式保留在 C 里</text>
+
+  <!-- Stage 3 -->
+  <text x="440" y="498" text-anchor="middle" class="ttf" font-size="14">T2 · 新 token D 的 attention 视图</text>
+
+  <rect x="20" y="514" width="410" height="180" fill="#fff" stroke="#dc2626" stroke-dasharray="2 2" rx="6"/>
+  <text x="32" y="534" class="stf" fill="#7f1d1d">冷路径下，D 看到的：</text>
+  <rect x="50" y="552" width="60" height="22" fill="#dcfce7" stroke="#16a34a" rx="2"/>
+  <text x="80" y="567" text-anchor="middle" class="kvf">KV(A)</text>
+  <text x="115" y="567" class="kvf">+</text>
+  <rect x="125" y="552" width="180" height="22" fill="#fef3c7" stroke="#d97706" rx="2"/>
+  <text x="215" y="567" text-anchor="middle" class="kvf" fill="#7f1d1d">KV(C | A, [cleared])</text>
+  <rect x="320" y="552" width="60" height="22" fill="#e0e7ff" stroke="#6366f1" rx="2"/>
+  <text x="350" y="567" text-anchor="middle" class="kvf">D（新）</text>
+  <line x1="320" y1="563" x2="306" y2="563" stroke="#dc2626" stroke-width="1" stroke-dasharray="2 2" marker-end="url(#arr5r)"/>
+  <text x="32" y="610" class="nt">D 间接读到的 C 是"没消化过 B"的版本</text>
+  <text x="32" y="628" class="nt">→ 模型彻底失去 B 的所有信息</text>
+  <text x="32" y="650" class="smf">前提是 cache 已凉，否则不会走这条路径</text>
+
+  <rect x="450" y="514" width="410" height="180" fill="#fff" stroke="#16a34a" stroke-dasharray="2 2" rx="6"/>
+  <text x="462" y="534" class="stf" fill="#15803d">cache_edits 下，D 看到的：</text>
+  <rect x="480" y="552" width="60" height="22" fill="#dcfce7" stroke="#16a34a" rx="2"/>
+  <text x="510" y="567" text-anchor="middle" class="kvf">KV(A)</text>
+  <text x="545" y="567" class="kvf">+</text>
+  <rect x="555" y="552" width="180" height="22" fill="#fef3c7" stroke="#d97706" rx="2"/>
+  <text x="645" y="567" text-anchor="middle" class="kvf" fill="#15803d">KV(C | A, B)</text>
+  <rect x="750" y="552" width="60" height="22" fill="#e0e7ff" stroke="#6366f1" rx="2"/>
+  <text x="780" y="567" text-anchor="middle" class="kvf">D（新）</text>
+  <line x1="750" y1="563" x2="736" y2="563" stroke="#16a34a" stroke-width="1" stroke-dasharray="2 2" marker-end="url(#arr5g)"/>
+  <text x="462" y="610" class="ng">D 间接读到的 C 凝固着"看过 B 时形成的判断"</text>
+  <text x="462" y="628" class="ng">→ B 的关键影响通过 C 间接传递给 D</text>
+  <text x="462" y="650" class="smf">这是"压上下文不丢历史影响"的关键</text>
+</svg>
+<div class="figure-caption">图 3：cache_edits 与冷路径在 KV cache 内部的差别。同样起点（T0 prefill 出 KV(C | A, B)），触发压缩时冷路径整段重算，C 变成 KV(C | A, [cleared])，B 的影响全失；cache_edits 只释放 B 的 page，KV(C | A, B) 原值保留，B 的影响通过 C 隐式带给后续 token D。</div>
+</div>
+
+<h3>5.1 cache_edits 不重算任何 KV</h3>
+
+<p>这是和冷路径最直接的差别。冷路径改了 messages，prefix 从置空处起破，服务端 cache miss，要把 A 之后的所有 token 重新 prefill 一遍——长 session 上这是 100K+ token 的全量 attention 计算。cache_edits 不改 messages 一个字节，A 段、C 段的 KV 是 T0 那次 prefill 算出来的原值，<strong>服务端只做了一件事：把 B 对应的 page 从 page_manager 里释放</strong>。没有任何 K/V 被重算。</p>
+
+<p>这一点对应到 §4 的代码注释——服务端 page release 是已有的 turn-to-turn 机制，cache_edits 只是给它加了一条按 cache_reference 触发的入口。<strong>所以 cache_edits 在服务端的"成本"几乎可以忽略</strong>：标记几个 page 为 released，不动任何 attention 计算。</p>
+
+<h3>5.2 C 的 K/V 凝固着 prefill 时见过 B 的状态</h3>
+
+<p>这一点是 cache_edits 最值得理解的部分，也是它和"普通的删 = 信息全丢"的根本差别。</p>
+
+<p>Transformer prefill 阶段是个有顺序的过程：A 先过 attention 算出 KV(A)；然后 B 过 attention，每个 B token 的 Q 都能 attend 到 A，所以 KV(B) 是"看着 A 算出来的"；最后 C 过 attention，每个 C token 的 Q 都能 attend 到 A 和 B，所以 <strong>C 的每一个 K/V 向量是基于"看得见 A、看得见 B"的语境算出来的</strong>。形式化写出来：</p>
+
+<pre><code>KV(C | A, B)  ≠  KV(C | A)</code></pre>
+
+<p>这两者的差别不是"附加信息"那种概念上的差别，而是 K/V 向量本身在数值层面就不同——C 的每个 token 在 prefill 时，attention 一定会去看 B 的 K/V，看完之后形成的 hidden state 进而决定 C 自己的 K/V。<strong>B 的影响在 prefill 那一刻就被烧进了 C 的 K/V 数值里，没法剥离开</strong>。</p>
+
+<p>cache_edits 释放的是 B 的 page，<em>不是</em> C 的 page。所以保留下来的 KV(A) 和 KV(C | A, B) 都是 T0 prefill 出来的原值——<strong>C 仍然是"消化过 B 的那个 C"</strong>。后续新 token D 进来 attention 时：</p>
+
+<ul>
+  <li>看不到 B 的 KV pages（已 released）</li>
+  <li>看得到 KV(A) 和 KV(C | A, B)</li>
+  <li>而 KV(C | A, B) 在数值层面就携带着 B 当时对 C 的影响</li>
+</ul>
+
+<p>结果就是：<strong>原始 B 的细节模型查不到了，但 C 里"看过 B 时形成的判断、根因、计划"仍在</strong>。这是个挺巧妙的"压缩同时不丢历史影响"——并不是 cache_edits 主动设计了什么"信息保留"机制，而是 prefill 顺序天然形成的副作用，cache_edits 只是没去破坏它（C 的 page 没动）。</p>
+
+<blockquote class="tip"><strong>对应到 coding agent 的常见模式：</strong>"我跑了 grep，结果如下（B：2 万行）。我从中看到根因是 X，已经定位到文件 Y 的第 Z 行（C：100 字）。"——B 的原文从 KV cache 释放掉了，但 C 当年算出来时是看着这 2 万行 grep 输出形成的"根因 X、文件 Y、第 Z 行"，这些判断在 C 的 K/V 里被凝固下来。模型后续工作仍能基于 C 推进。</blockquote>
+
+<h3>5.3 三类压缩方案的横向对比</h3>
+
+<p>把 cache_edits 放回到压缩方案的谱系里看一眼：</p>
+
+<table>
+<thead><tr><th></th><th>冷路径（content 置空）</th><th>autocompact / contextCollapse（摘要重写）</th><th><strong>cache_edits（热路径）</strong></th></tr></thead>
+<tbody>
+<tr><td>是否改 messages 字节</td><td>是</td><td>是</td><td><strong>否</strong></td></tr>
+<tr><td>prefix hash</td><td>从首处改动起破</td><td>从摘要插入处起破</td><td><strong>不破</strong></td></tr>
+<tr><td>是否要重算 KV</td><td>整段重算</td><td>整段重算</td><td><strong>不重算</strong></td></tr>
+<tr><td>被压缩内容对 C 的影响</td><td>丢失（C 重算时看不见）</td><td>丢失（C 是从摘要重新 prefill 出来的）</td><td><strong>保留</strong>（KV(C \| A, B) 是 T0 原值）</td></tr>
+<tr><td>触发条件</td><td>cache 已凉</td><td>上下文逼近上限</td><td>tool_result 数量超阈值</td></tr>
+</tbody>
+</table>
+
+<p>核心红利汇成一句：<strong>cache_edits 是同时拿到"不改 messages（cache 不破）+ 不重算 KV + 被删部分通过 C 的 K/V 隐式留下影响"三件事的压缩方案</strong>。普通方案二选一已经不容易，三件事同时拿到的代价是必须有 first-party stack 才能做（§6 展开）。</p>
+
+<h3>5.4 system prompt 在 prompt 层放大这个机制</h3>
+
+<p>5.2 讲的红利有一个隐含前提——<strong>C 真的吸收了 B 的关键内容</strong>。如果 prefill C 那一刻，模型只是草草看了一眼 B 就略过，C 的 K/V 里就承载不了多少 B 的信息。删 B 后 C 看起来还在，但里面其实空空。</p>
+
+<p>有意思的是，Claude Code 的 system prompt 里有一段专门为这件事配合：</p>
+
+<pre><code>When working with tool results, write down any important information you might
+need later in your response, as the original tool result may be cleared later.</code></pre>
+
+<p>这句话翻译过来是："处理工具结果时，把后面可能要用到的关键信息明文写进你的回复——原始 tool result 之后可能被清掉。"它在 prompt 层主动诱导模型在 prefill C（assistant 回复）的时候多消化 B（tool result）的内容、多写明确的总结判断。<strong>消化得越扎实，C 的 K/V 里凝固的 B 的影响就越多</strong>，cache_edits 后续删 B 的代价就越小。</p>
+
+<p>这是机制设计上一个巧妙的配合：服务端的 cache_edits 提供"压缩同时不丢影响"的物理基础，prompt 层的这条 instruction 让"C 吸收 B"这件事在每一轮被持续放大。两端配合起来，长 session 跑下来 cache_edits 才能真正发挥效果——而不只是"理论上 C 有 B 的痕迹，实际上痕迹很浅"。</p>
+
+<hr>
+
+<h2>六、这是 Anthropic 内部能力，不是公开 API <span class="badge-fact">代码已证实</span></h2>
+
+<p>客户端开关有三层硬条件：<code>provider === 'firstParty'</code>（必须直连 Anthropic API，Bedrock / Vertex / OpenRouter / 自建 proxy 走不通）+ <code>querySource === 'repl_main_thread'</code>（仅 REPL 主线程，子 agent 不开）+ <code>CACHE_EDITING_BETA_HEADER</code>（公开 build 里这个常量是空字符串，ant build 才有具体值）。三层加在一起意思很明确：<strong>cache_edits 是 Anthropic first-party stack 上的内部 beta 能力，不在公开 prompt caching 文档里</strong>。第三方 SDK / 兼容层即使发同样形状的 cache_edits block，目标服务端没有对应处理逻辑——具体表现是被忽略、报错还是按 raw prefix 兜底，得实测。</p>
+
+<hr>
+
+<h2>七、整体图景与差异化优势：如果推测大致正确，意味着什么</h2>
+
+<div class="punchline">
+<strong>如果 cache_edits 真的按上面推测的方式工作，它的特殊之处是同时拿到了三件普通压缩拿不全的红利</strong>——不改 messages（cache 不破）、不重算 KV、被删部分通过 C 的 K/V 隐式留下影响。任何走"改 messages → cache miss → 重算"路线的普通压缩都拿不到这三件事；而走"靠摘要保留信息"路线的方案，C 的 K/V 是基于摘要重新算出来的，B 的影响也无法被原本的 prefill 数值层凝固下来。<strong>cache_edits 是同时满足这三件事的唯一已知做法</strong>，前提是必须有 first-party 服务端栈。
+</div>
+
+<p>这套机制的代价相对清楚：必须 first-party（依赖 Mycro 的 page_manager）、必须 beta header（未公开 API）、必须接受"原始 tool_result 不可回查"。收益也比较清楚：cache 还热的场景下也能持续压缩旧 tool_result，长 session 跑下去既不破 cache 经济性、又不让模型完全失去过去做过的判断。</p>
+
+<h3>这或许会成为 Anthropic 的 model × agent harness 护城河</h3>
+
+<p>用现在比较主流的说法描述：cache_edits 是一个典型的 <strong>model × agent harness 协同优势</strong>——单看模型层不构成优势，单看 agent 框架也不构成优势，必须两端配合才能拿到。</p>
+
+<p>具体到这个机制：</p>
+
+<ul>
+  <li><strong>Claude 模型那一端</strong>支持 cache_edits 这个特性——服务端 page_manager 里有按 cache_reference 主动释放 page 的入口，并保证 release 之后后续 token 的 logical position 不受影响、attention 计算正常进行</li>
+  <li><strong>Claude Code 这个 agent harness</strong>知道怎么用——会给 tool_result 标 cache_reference、会按阈值生成 cache_edits 块、会做 pin / 每轮重发，还在 system prompt 里通过"先把要紧的事记下来"那条 instruction 持续放大效果</li>
+</ul>
+
+<p>少哪一端都不行：</p>
+
+<ul>
+  <li><strong>Claude Code + 别家 LLM</strong>：在 Claude Code 里把模型换成 GPT / Gemini / 开源模型，cache_edits 块发过去对方服务端不认识——OpenAI、Bedrock 上的 Claude、自建 vLLM 都没有 page_manager 这一层。Claude Code 的客户端协议在没有相应服务端支持时只能退化成普通 prompt cache，cache_edits 那部分能力直接消失。</li>
+  <li><strong>Claude 模型 + 别家 agent harness</strong>：在 Cursor / Aider / 自建 agent 里调 Anthropic API 直连 Claude，cache_edits 这个特性虽然服务端是有的，但客户端不发这种格式的请求、不知道怎么标 cache_reference、不知道怎么 pin / 重发——服务端有这能力也用不上，长 session 仍然会被旧 tool_result 拖死。</li>
+</ul>
+
+<p>两端都是 Anthropic 自己做的（Claude 模型 + Claude Code），才能拿到这个完整能力。这就是<strong>典型的 model × agent harness 护城河</strong>：不是单一模型能力的领先，也不是某个工具好用，而是"模型支持的特性 + 客户端能用上这些特性"两件事必须捆绑才能复制。第三方接入方拿不到完整能力，要复制必须同时做模型和 agent harness 这两件事。</p>
+
+<p>对 Anthropic 来说，这种护城河比单纯的模型能力领先更稳固——模型能力的差距追得上（OpenAI、DeepSeek、Google 都在追），但"模型 + harness 协同"的差距追起来代价高得多，因为这要求同时在两条产品线上做投入。Claude Code 越是把 agent harness 做厚（cache_edits 只是其一，背后还有 microcompact、context collapse、buddy 等等机制），这个护城河就越深。</p>
+
+<p>当然这一切的前提是推测大致正确。如果 cache_edits 实际效果远不如预期（比如 C 对 B 的吸收不够扎实、删 B 后模型行为明显劣化），那这条护城河就不成立。</p>
+
+<p>以上都是基于代码 + 一段注释的合理推测。<strong>欢迎大家在评论区交流：cache_edits 是不是这样工作的？这种 model × agent harness 的协同优势，会不会真的成为 Anthropic 的护城河之一？</strong></p>
+
+<hr>
+
+<h3>参考资料</h3>
+<ul>
+  <li>仓库相关代码：
+    <ul>
+      <li><code>src/services/api/claude.ts</code> · <code>addCacheBreakpoints()</code> / 服务端 Mycro 注释 / cache_edits block 形状</li>
+      <li><code>src/services/compact/microCompact.ts</code> · pin/consume 模式 + cachedMicrocompactPath</li>
+      <li><code>src/services/compact/cachedMicrocompact.ts</code> · 状态机定义（公开 build 仅签名，类型可见）</li>
+      <li><code>src/utils/contentArray.ts</code> · <code>insertBlockAfterToolResults()</code></li>
+      <li><code>src/services/api/promptCacheBreakDetection.ts</code> · cache deletion 的 break detection 例外处理</li>
+      <li><code>src/entrypoints/sdk/sdkUtilityTypes.ts</code> · <code>cache_deleted_input_tokens</code> 响应字段</li>
+    </ul>
+  </li>
+  <li><a href="https://platform.claude.com/docs/en/build-with-claude/prompt-caching" target="_blank">Anthropic Prompt Caching 官方文档</a>（cache 是 prefix hash 的来源；cache_edits 不在公开文档里）</li>
+  <li>社区相关分析：Reddit <code>r/ClaudeCode</code> 的 cache_edits 逆向帖、Houstoten 的 Claude Code internals gist</li>
+</ul>
+
+</body>
+</html>

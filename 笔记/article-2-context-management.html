@@ -324,7 +324,7 @@ while (true) {
 
   <!-- arrow from step 4 down to step 5 -->
   <path d="M 740 133 L 740 175 L 555 175 L 555 195" stroke="#475569" stroke-width="1.5" fill="none" marker-end="url(#arrf)"/>
-  <text x="745" y="150" class="smf" font-size="10">前 4 道都没救住</text>
+  <text x="735" y="150" text-anchor="end" class="smf" font-size="10">前 4 道都没救住</text>
 
   <!-- step 5 -->
   <rect x="430" y="200" width="250" height="100" fill="#fee2e2" stroke="#dc2626" stroke-width="2" rx="6"/>
@@ -496,7 +496,7 @@ Preview (first 2000 bytes):
 
 <p>解决的问题：<strong>有些旧历史段对当前任务<em>显然</em>无用了</strong>——比如用户排查 bug 已经得出结论、或者一段探索分支已经被放弃。autocompact 会把它们一并丢进总结，但其实直接删掉更好（不耗总结成本、保留细粒度）。</p>
 
-<blockquote class="warn"><strong>提醒：</strong>这个模块在公开 build 里只剩接口签名（<code>// Auto-generated stub</code>），不能从公开仓库直接跑出 snip 行为。但接口、调用点、resume 恢复逻辑、context_efficiency 附件里的注释（讲 nudge 节奏）、消息上的 <code>[id:xxxxxx]</code> 短 ID 标签等多重线索拼起来，设计意图非常清楚——下面讲的就是从这些线索逆推出的最可能算法。</blockquote>
+<blockquote class="warn">这个模块在公开 build 里只剩接口签名（<code>// Auto-generated stub</code>），无法从公开仓库直接跑出 snip 行为。但接口、调用点、resume 恢复逻辑、context_efficiency 附件里的注释（讲 nudge 节奏）、消息上的 <code>[id:xxxxxx]</code> 短 ID 标签等多重线索拼起来，设计意图相当清楚——下面讲的就是从这些线索逆推出的最可能算法。</blockquote>
 
 <h3>4.1 触发节奏：nudge 模型，不是硬阈值</h3>
 
@@ -539,6 +539,8 @@ Preview (first 2000 bytes):
 
 <p>函数返回 <code>tokensFreed</code>，给后面的 autocompact 做阈值修正——避免 autocompact 拿着 stale usage 误判触发。</p>
 
+<blockquote class="warn"><strong>关于 prompt cache 的提醒：</strong>snip 的本质是<em>从 messages 中段抠掉一整片消息</em>——发给 API 的 messages 数组直接少了几条，prefix hash 从 snip 点起必然变化。这意味着<strong>如果没有像 cache_edits 那样的服务端配合机制，snip 几乎一定会破坏 prompt cache</strong>，从删除点之后到末尾的整段 KV 都要重新 prefill。从公开 build 的接口形态看不到 snip 是否做了 cache 保留设计（比如把 snip 点对齐到 cache_control marker 边界、或借用 cache_edits 协议的反向入口）——这一点代码里钉不死，也没有公开实验数据，只能作为开放问题留给读者。</blockquote>
+
 <hr>
 
 <h2>五、第 3 道：<code>microcompactMessages</code> — 旧 tool_result 清理</h2>
@@ -562,6 +564,8 @@ Preview (first 2000 bytes):
 <p>当 cache 还热（距上次 assistant 不久）+ 模型支持 cache editing + 主线程（非子 agent）时，走另一条路：<strong>不动本地 messages</strong>，而是给请求附加 <code>cache_edits</code> 指令，让服务端在缓存前缀里直接删掉旧 tool_result。</p>
 
 <p>这条路径的好处是<strong>本地 messages 完全不动、prompt cache 命中保住</strong>——你删的不是"要发的内容"，是"已缓存前缀里的部分"。</p>
+
+<blockquote class="tip"><code>cache_edits</code> 本身是一套相当反直觉的机制——客户端发完整 prefix、服务端在缓存上"打洞"——背后涉及客户端 pin/重发协议和服务端可能的 KV page 级管理。它最值得理解的特点是：作为一种上下文压缩方案，它能做到"不破 cache、不重算 KV、被压缩内容仍隐式留在 C 的 K/V 里"。本文不展开，对具体实现机制感兴趣可以看后续的专题文章。</blockquote>
 
 <p>触发条件是<strong>计数</strong>：每轮 query 前扫描完整对话历史，把还没登记过的 compactable tool_result 注册进 <code>cachedMCState</code>（<code>toolOrder</code> 记录顺序、<code>deletedRefs</code> 记录已删的）。当——</p>
 
@@ -612,6 +616,8 @@ Preview (first 2000 bytes):
   <li>后台启动 ctx-agent 拉总结，成功后提交为 collapsed span</li>
 </ol>
 
+<blockquote class="warn"><strong>关于 span 划分机制的提醒：</strong>"主线程发现这段可以折叠"这一步——<em>谁来识别 span 边界、按什么标准切</em>——在公开 build 里完全看不到。<code>operations.ts</code> 里的 <code>projectView</code> 是 identity stub（直接返回原 messages，没有任何 span 候选识别逻辑），<code>persist.ts</code> 也是空 stub。能从代码读到的只是数据结构（两个 UUID 标记 span 起止）和异步流程框架。所以现在<strong>没法分辨</strong>：是按 token 长度切（每攒够 N 个 token 就划一段）、按 turn 切（按 user→assistant 回合切）、按任务语义切（识别"这段排查已得出结论"），还是后台 ctx-agent 自己去看完整 transcript 后判断。这一段的具体策略是文章<em>无法回答的开放问题</em>——希望了解的同学如果有进一步信息欢迎评论区指出。</blockquote>
+
 <h3>6.3 读取时是<em>投影</em>不是<em>插消息</em></h3>
 
 <p>这是 collapse 和 autocompact 最大的区别。autocompact 是把摘要消息<strong>插进 messages 链</strong>；collapse 不动 messages 链，<strong>读取时通过 <code>projectView()</code> 投影</strong>——把 <code>firstArchivedUuid..lastArchivedUuid</code> 区段在视图里替换成 <code>&lt;collapsed id="...">summary&lt;/collapsed&gt;</code> 占位符。</p>
@@ -630,7 +636,7 @@ Preview (first 2000 bytes):
 
 <p>解决的问题：<strong>前 4 道关都没把上下文压到阈值下</strong>。autocompact 用当前 <code>messagesForQuery</code> 估算 token，减去 snip 释放的 <code>tokensFreed</code>，仍然超阈值就触发。</p>
 
-<p>autocompact 自己分两条分支——能不调 LLM 就不调：</p>
+<p>autocompact 自己分两条分支——核心差别<strong>不是总成本，而是触发时是否要现场等一次 LLM 总结</strong>。两条都会调 LLM、两条都吃 prompt cache，但承担成本的时机和信息怎么积累不同：</p>
 
 <div class="figure">
 <svg width="820" height="380" viewBox="0 0 820 380" xmlns="http://www.w3.org/2000/svg">
@@ -645,7 +651,7 @@ Preview (first 2000 bytes):
     </marker>
   </defs>
 
-  <text x="410" y="22" text-anchor="middle" class="ttla" font-size="15">autocompact 两条分支：能省 LLM 就省 LLM</text>
+  <text x="410" y="22" text-anchor="middle" class="ttla" font-size="15">autocompact 两条分支：触发时是现场跑 LLM 还是读后台已积累的笔记</text>
 
   <!-- entry -->
   <rect x="320" y="50" width="180" height="50" fill="#fee2e2" stroke="#dc2626" stroke-width="2" rx="6"/>
@@ -665,8 +671,8 @@ Preview (first 2000 bytes):
 
   <rect x="60" y="250" width="280" height="100" fill="#dcfce7" stroke="#16a34a" stroke-width="2" rx="6"/>
   <text x="200" y="272" text-anchor="middle" class="ttla" fill="#15803d">session-memory compact</text>
-  <text x="200" y="290" text-anchor="middle" class="sma" fill="#15803d" font-weight="bold">不调 LLM</text>
-  <text x="200" y="308" text-anchor="middle" class="sma">直接读 SessionMemory 文件</text>
+  <text x="200" y="290" text-anchor="middle" class="sma" fill="#15803d" font-weight="bold">触发时不阻塞跑 LLM</text>
+  <text x="200" y="308" text-anchor="middle" class="sma">读后台已积累的 summary.md</text>
   <text x="200" y="324" text-anchor="middle" class="sma">+ 保留一段最近原始消息尾巴</text>
   <text x="200" y="340" text-anchor="middle" class="sma">（≥10K tokens / ≥5 条文本消息）</text>
 
@@ -681,12 +687,27 @@ Preview (first 2000 bytes):
   <text x="620" y="324" text-anchor="middle" class="sma">不保留原始尾巴</text>
   <text x="620" y="340" text-anchor="middle" class="sma">原始 messages 整段被替代</text>
 </svg>
-<div class="figure-caption">图 3：autocompact 优先走 session-memory（免费的、靠后台维护好的总结文件）；失败才走完整 compact（调 LLM 现场重写一段总结）。</div>
+<div class="figure-caption">图 3：autocompact 优先走 session-memory——summary.md 由后台 post-sampling hook 在会话期间持续维护（这份维护本身要花 LLM token，是异步的），触发时只读文件不阻塞。失败才走完整 compact，触发时现场跑一次 LLM 总结整段历史，等几十秒到几分钟。</div>
 </div>
 
-<h3>7.1 分支 A：session-memory compact（不调 LLM）</h3>
+<h3>7.1 分支 A：session-memory compact（读后台已积累的笔记）</h3>
 
-<p>关键洞察：<strong>session-memory 文件不是 compact 时现场生成的，而是会话过程中由 post-sampling hook 在后台持续维护的</strong>一份 markdown 记忆文件。compact 触发时直接读这份文件即可，不需要重跑 LLM。</p>
+<p>关键洞察：<strong>summary.md 不是 compact 时现场生成的，而是会话过程中由 post-sampling hook 在后台持续维护的</strong>一份 markdown 记忆文件。每次主线程采样完成后，hook 会异步 fork 一个子 agent，用 <code>Edit</code> 工具在 summary.md 上<strong>增量更新</strong>对应 section——这份后台维护本身要花 LLM token（fork agent 跑主模型），不是免费的。但 compact 触发那一刻，summary.md 早已就绪——只读文件即可，最多等 15s 已 in-flight 的最后一次后台更新（<code>waitForSessionMemoryExtraction</code>）。</p>
+
+<p>summary.md 的模板是固定的 10 段（首次创建文件时由 <code>DEFAULT_SESSION_MEMORY_TEMPLATE</code> 写入，子 agent 之后<strong>只能 Edit 各 section 内的内容、不能改动 section 标题</strong>）：</p>
+
+<pre><code># Session Title                       ← 5-10 词的会话标识，信息密度高、不啰嗦
+# Current State                       ← 当前在做什么、待办、下一步
+# Task specification                  ← 用户最初要求什么、设计决策与背景
+# Files and Functions                 ← 关键文件清单 + 内容 + 为什么相关
+# Workflow                            ← 常跑的 bash 命令 + 输出怎么解读
+# Errors &amp; Corrections                ← 踩过的坑 + 修复 + 用户纠正 + 失败的方法
+# Codebase and System Documentation   ← 系统组件 + 它们怎么协作
+# Learnings                           ← 什么有用、什么没用、要避免什么
+# Key results                         ← 用户要求的具体输出（答案/表格/文档）原样保留
+# Worklog                             ← 逐步记录尝试和完成的事（每步极简）</code></pre>
+
+<p>每个 section 软上限约 2000 tokens，整文件软上限 12000 tokens，超限时 prompt 会带 <code>CRITICAL:</code> 提示让子 agent 压缩。这 10 段对照前面 §7.2 完整 compact 的 9 段会发现两者有重合（比如"用户在做什么 / 文件清单 / 错误修复 / 待办 / 下一步"几乎一一对应），但 session-memory 多了两件事：<strong>Workflow（命令使用模式）</strong>和 <strong>Learnings（什么 work 什么不 work）</strong>——这两段是"靠时间累积才有意义"的内容，恰好是后台增量更新模式才能扎实积累出来的，现场一次性总结很难写好。</p>
 
 <p>compact 后真正发给 LLM 的 messages 大致是：</p>
 
@@ -697,15 +718,21 @@ Preview (first 2000 bytes):
    "This session is being continued from a previous conversation that ran out
    of context. The summary below covers the earlier portion of the conversation.
 
+   # Session Title
+   Claude Code 上下文管理拆解
+
    # Current State
    - 用户当前在看 query.ts 的上下文压缩链路
    - 已确认 applyToolResultBudget / microcompact / autocompact 的职责
+   - 下一步：继续理解完整 compact 的 prompt 和产物
 
-   # Important Findings
+   # Files and Functions
+   - src/query.ts:415  调用 microcompactMessages
+   - src/services/compact/autoCompact.ts  autocompact 入口
    ...
 
-   # Next Step
-   - 继续理解完整 compact 的 prompt 和产物
+   # Errors &amp; Corrections
+   - 误以为 cache_edits 在公开 build 完整可用，实际仅签名
 
    If you need specific details from before compaction, read the full transcript at:
    /path/to/session.jsonl
@@ -767,21 +794,23 @@ N. user message             // summaryRequest（追加在末尾）
   <li><strong>invoked skills 只在完整 compact 路径补</strong>，session-memory 路径不补。</li>
 </ul>
 
-<h3>7.4 为什么有两条分支</h3>
+<h3>7.4 两条分支差在哪</h3>
 
-<p>这是整篇文章的一个点睛：<strong>同一道关里再分"轻"和"重"</strong>。</p>
+<p>容易被误读的一点：session-memory 路径<strong>不是为了省 LLM 总成本</strong>。两条路径都会调 LLM，且都吃满 prompt cache——主对话累积的 messages prefix 在两条路径里都已经被 cache 过，完整 compact 在末尾追加一条 summaryRequest 也只是加几百 token 的 cache miss + 一次 summary 输出。单看 token 总成本，session-memory 把"总结整段历史"这件事拆成会话过程中 N 次后台小调用，累积起来反而<em>可能更贵</em>。</p>
+
+<p>真正的差别在<strong>触发时是否阻塞 + 信息怎么积累</strong>：</p>
 
 <table>
 <thead><tr><th></th><th>session-memory</th><th>完整 compact</th></tr></thead>
 <tbody>
-<tr><td>调 LLM？</td><td>否（读文件）</td><td>是（现场总结）</td></tr>
-<tr><td>原始尾巴</td><td>保留 ≥10K tokens / ≥5 条</td><td>没有，整段被替代</td></tr>
-<tr><td>触发场景</td><td>SessionMemory 文件已就绪</td><td>session-memory 不可用 / 失败</td></tr>
-<tr><td>代价</td><td>~0（一次磁盘读）</td><td>跑一次完整总结请求</td></tr>
+<tr><td>触发时是否阻塞跑 LLM</td><td>否（summary.md 早已就绪，最多等 15s 已 in-flight 的后台更新）</td><td>是（现场跑一次完整总结，等几十秒到几分钟）</td></tr>
+<tr><td>LLM 成本承担时机</td><td>会话期间 N 次后台小调用累积（用户无感）</td><td>触发瞬间 1 次中型调用（用户在等）</td></tr>
+<tr><td>信息连续性</td><td>summary.md 增量 Edit，多轮 compact 都基于这份持续累积的笔记</td><td>每次基于当前 messages（含上次 summary message）重新总结，多轮后早期信息逐渐糊化</td></tr>
+<tr><td>原始尾巴</td><td>保留 ≥10K tokens / ≥5 条</td><td>不保留，整段被替代</td></tr>
 </tbody>
 </table>
 
-<p>能用文件就用文件，是因为<strong>SessionMemory 在会话期间已经由后台 hook 在维护</strong>——这份维护本来就要做（用于其他场景），compact 只是顺手用一下。这是典型的"已有的工作要榨干"思维。</p>
+<p>所以 session-memory 是个<strong>延迟优化 + 信息连续性优化</strong>，<em>不是</em> token 成本优化。它把"总结这件事"从同步昂贵操作变成异步增量积累，换来 (1) 触发时几乎不卡的用户体感、(2) 多轮 compact 之间不会越压越糊。代价是会话过程中持续付一些后台 extraction 成本（量级不大、对用户隐藏）。</p>
 
 <hr>
 
@@ -794,7 +823,7 @@ N. user message             // summaryRequest（追加在末尾）
 <tbody>
 <tr><td><strong>粒度</strong></td><td>单条 tool_result</td><td>历史区段</td><td>旧 tool_result</td><td>多个 span</td><td>整段历史</td></tr>
 <tr><td><strong>动作</strong></td><td>替换为占位字符串</td><td>删除</td><td>清空 / 服务端删</td><td>分段总结+投影</td><td>整段总结</td></tr>
-<tr><td><strong>调 LLM</strong></td><td>否</td><td>否（模型决策）</td><td>否</td><td>后台小模型</td><td>是（完整分支）</td></tr>
+<tr><td><strong>触发时阻塞跑 LLM</strong></td><td>否</td><td>否（模型决策）</td><td>否</td><td>否（后台小模型异步）</td><td>仅完整分支</td></tr>
 <tr><td><strong>是否丢失原始</strong></td><td>否（写盘可恢复）</td><td>否（JSONL 保留）</td><td>否（占位符）</td><td>否（投影）</td><td><strong>是</strong></td></tr>
 </tbody>
 </table>
@@ -802,7 +831,7 @@ N. user message             // summaryRequest（追加在末尾）
 <p>三条规律一目了然：</p>
 
 <ol>
-  <li><strong>越靠后代价越高</strong>：从规则替换 → 模型决策 → 后台小模型 → 主模型重写。前 4 道都不调主模型。</li>
+  <li><strong>越靠后越倾向于阻塞主线程</strong>：从规则替换 → 模型决策 → 后台异步小模型 → 触发时同步重写。前 4 道触发时都不阻塞主线程跑 LLM；只有第 5 道的"完整 compact"分支会让用户在那等。</li>
   <li><strong>越靠前粒度越细</strong>：单条 → 区段 → 类型 → 多 span → 整段。粗粒度只在前面无效时才用。</li>
   <li><strong>只有第 5 道"完整 compact"会丢失原始消息粒度</strong>。前 4 道都做到了"压而不毁"——要么替换可还原（写盘）、要么删除有记录（removedUuids）、要么投影不动数据（projectView）、要么占位符可展开（&lt;collapsed&gt;）。</li>
 </ol>
@@ -810,7 +839,7 @@ N. user message             // summaryRequest（追加在末尾）
 <p>这三条规律一起构成 CC 上下文管理的核心设计：</p>
 
 <div class="punchline">
-<strong>能不调 LLM 就不调，能保留原文就保留，能用前一道关解决就不到后一道关。</strong>5 道关像漏斗一样把不同性质的"上下文膨胀"分流处理——单轮急性问题在第 1 道就死掉、累积型旧 tool_result 在第 3 道处理掉、显然无用的旧段在第 2 道删掉、即将超阈时在第 4 道分段归档保细粒度——只有这些都失败时，第 5 道的"完整 compact"才会出手做"丢精度换 token"的硬交易。
+<strong>触发时能不阻塞主线程跑 LLM 就不阻塞，能保留原文就保留，能用前一道关解决就不到后一道关。</strong>5 道关像漏斗一样把不同性质的"上下文膨胀"分流处理——单轮急性问题在第 1 道就死掉、累积型旧 tool_result 在第 3 道处理掉、显然无用的旧段在第 2 道删掉、即将超阈时在第 4 道分段归档保细粒度——只有这些都失败时，第 5 道的"完整 compact"才会出手做"丢精度换 token"的硬交易。
 </div>
 
 <p>关于"公开 build 仅签名"的那 3 道关，最后澄清一句：snip、cachedMicrocompact 的热路径、contextCollapse 三个模块在公开构建里都只剩 <code>// Auto-generated stub</code> 这种占位实现——但<strong>这并不代表 Anthropic 内部没实现</strong>。从这套接口、调用顺序、状态字段、错误恢复链路、context_efficiency 附件里的注释、还有恢复逻辑里对 <code>removedUuids</code> / <code>collapsedSpans</code> 的处理来看，这些功能内部跑得完整且体系化，只是公开 build 在打包时把它们剥离了（具体原因可能是内部 feature flag、依赖内部基础设施、或还在灰度）。所以本文里出现"仅签名"标签的地方，讨论的是<strong>从接口/恢复路径反推出来的设计意图</strong>，而不是"未实现的功能"。</p>
@@ -819,9 +848,9 @@ N. user message             // summaryRequest（追加在末尾）
 
 <hr>
 
-<h2>留个口子，欢迎评论区</h2>
+<h2>九、欢迎讨论</h2>
 
-<p>5 道关里你最关心哪一道？哪一道你觉得在你的 agent 项目里也用得上、哪一道反而过度设计了？尤其想听听做长任务 agent 的同事的实践——你们是怎么解决"上下文越用越胀"的，以及 prompt cache 命中率你们一般做到多少。下一篇打算讲 <strong>Tool 系统与 Skill 机制</strong>，看 CC 是怎么把 60 多个工具组织起来不让模型选择困难的。</p>
+<p>5 道关里你最关心哪一道？哪一道在你的 agent 项目里也用得上、哪一道反而过度设计了？尤其想听听做长任务 agent 的同事的实践——你们是怎么解决"上下文越用越胀"的，以及 prompt cache 命中率一般能做到多少。下一篇打算讲 <strong>Tool 系统与 Skill 机制</strong>，看 CC 是怎么把 60 多个工具组织起来不让模型选择困难的。</p>
 
 <hr>
 
