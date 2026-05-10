@@ -1,6 +1,7 @@
 # System prompt 相关笔记
 
-- **Output style（输出风格）** 通过配置项 `**outputStyle`** 控制（字符串，写在 Claude Code 的 `**~/.claude/settings.json**` 或仓库 `**.claude/settings.json**` 里）。**默认不写或写 `"default"`** 时等价于「无额外风格」——不注入 Explanatory/Learning 那套追加 prompt（见 `[getOutputStyleConfig](../src/constants/outputStyles.ts)`）。**内置两种可选名**（需与代码里键名一致）：`**Explanatory`**、`**Learning**`；也可使用自定义 Markdown 样式（`~/.claude/output-styles/` 或项目 `.claude/output-styles/`），此时 `outputStyle` 填该样式的 `**name**`。示例：`"outputStyle": "Explanatory"`。
+- **Output style（输出风格）** 通过配置项 `**outputStyle`** 控制（字符串，写在 Claude Code 的 `**~/.claude/settings.json`** 或仓库 `**.claude/settings.json**` 里）。**默认不写或写 `"default"`** 时等价于「无额外风格」——不注入 Explanatory/Learning 那套追加 prompt（见 `[getOutputStyleConfig](../src/constants/outputStyles.ts)`）。**内置两种可选名**（需与代码里键名一致）：`**Explanatory`**、`**Learning`**；也可使用自定义 Markdown 样式（`~/.claude/output-styles/` 或项目 `.claude/output-styles/`），此时 `outputStyle` 填该样式的 `**name**`。示例：`"outputStyle": "Explanatory"`。
+- **Prompt 与评测（eval）**：系统提示里的文案并非随手写的；很多段落会注明经评测验证（例如 `Eval-validated (memory-prompt-iteration.eval.ts, …)`）。对比会细到**章节标题**：同一段正文，只改标题（如「Before recommending from memory」vs 更抽象的「Trusting what you recall」），效果会差很多——注释里写明一类标题在 append 场景下 3/3，另一类 0/3。详见 [memoryTypes.ts 中](../src/memdir/memoryTypes.ts) `TRUSTING_RECALL_SECTION` [上方注释](../src/memdir/memoryTypes.ts)（约 224–239、241–244 行）。
 
 ## 模型真正看到的结构（`callModel` 一刻）
 
@@ -12,10 +13,10 @@ messages:       [ getUserContext + getCoordinatorUserContext → 一条 reminder
 ```
 
 - `**getSystemPrompt` 各段…**：下文 `**## getSystemPrompt` 默认非 ant / ant 对照`** 大表里那些节，每项对应数组里的一段。  
-- `**可选 memory【正常无】`**：`QueryEngine` 在**已设自定义 system** 且环境 `**CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`** 时追加的 `**loadMemoryPrompt()**`，教模型怎么用外部记忆的读写规则；无独立 `##`。  
+- `**可选 memory【正常无】`**：`QueryEngine` 在**已设自定义 system** 且环境 `**CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`** 时追加的 `**loadMemoryPrompt()`**，教模型怎么用外部记忆的读写规则；无独立 `##`。  
 - `**可选 append**`：配置 `**appendSystemPrompt**`（CLI/`main.tsx` 等还可能把 Chrome、proactive 等**拼进同一段字符串**），无独立 `##`。  
 - `**getSystemContext` 打成的一段`**：下文 **`## getSystemContext`**；多键合成**一条**` 键: 值` 文本，挂在 **system 数组末尾**。  
-- **一条 reminder**：`[prependUserContext](../src/utils/api.ts)` 插在 `**messages` 最前**的一条 **user、meta** 消息，外层是 `<system-reminder>…</system-reminder>`，里面是 `**# claudeMd`**、`**# currentDate**` 等；正文来自下文 `**## getUserContext**`，协调器时在同一包里多 `**# workerToolsContext**`（`**## getCoordinatorUserContext**` 已 merge 进 `userContext`）。
+- **一条 reminder**：`[prependUserContext](../src/utils/api.ts)` 插在 `**messages` 最前**的一条 user、meta 消息，外层是 `<system-reminder>…</system-reminder>`，里面是 `**# claudeMd`**、`**# currentDate**` 等；正文来自下文 `**## getUserContext**`，协调器时在同一包里多 `**# workerToolsContext**`（`**## getCoordinatorUserContext**` 已 merge 进 `userContext`）。
 
 **特例**：若 `**customSystemPrompt**` 存在，`[fetchSystemPromptParts](../src/utils/queryContext.ts)` 会 `**defaultSystemPrompt = []**`、`**systemContext = {}**`，则上面示意里 `**getSystemPrompt` 默认多段**与 **getSystemContext 段**常空掉，但 **memory / append** 仍可按条件出现。
 
@@ -25,10 +26,12 @@ messages:       [ getUserContext + getCoordinatorUserContext → 一条 reminder
 
 **两条路径不一致（当前实现）**：
 
-| 路径 | system 侧 | user reminder 侧 |
-|------|-----------|------------------|
-| **REPL** | 用 `[getCoordinatorSystemPrompt](../src/coordinator/coordinatorMode.ts)` **整段替换**下文大表里由 `getSystemPrompt` 产出的默认多段（Intro、# System、Doing tasks、Using tools、动态段等一律不再出现）；**仍保留** `appendSystemPrompt` 追加在 coordinator 正文之后。 | 与常规模块相同，并合并 `getCoordinatorUserContext` → `# workerToolsContext`（见下文 **## getCoordinatorUserContext**）。 |
-| **QueryEngine（SDK ask）** | **不**走 `buildEffectiveSystemPrompt`，仍按 `fetchSystemPromptParts` + `asSystemPrompt` 组装（即仍是 `getSystemPrompt` 默认表那一套 + 可选 custom/memory/append），**没有** coordinator 主编排正文。 | 同样合并 `getCoordinatorUserContext`，故 reminder 里仍有 `# workerToolsContext`。 |
+
+| 路径                       | system 侧                                                                                                                                                                                                               | user reminder 侧                                                                                         |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| **REPL**                 | 用 `[getCoordinatorSystemPrompt](../src/coordinator/coordinatorMode.ts)` **整段替换**下文大表里由 `getSystemPrompt` 产出的默认多段（Intro、# System、Doing tasks、Using tools、动态段等一律不再出现）；**仍保留** `appendSystemPrompt` 追加在 coordinator 正文之后。 | 与常规模块相同，并合并 `getCoordinatorUserContext` → `# workerToolsContext`（见下文 **## getCoordinatorUserContext**）。 |
+| **QueryEngine（SDK ask）** | **不**走 `buildEffectiveSystemPrompt`，仍按 `fetchSystemPromptParts` + `asSystemPrompt` 组装（即仍是 `getSystemPrompt` 默认表那一套 + 可选 custom/memory/append），**没有** coordinator 主编排正文。                                                | 同样合并 `getCoordinatorUserContext`，故 reminder 里仍有 `# workerToolsContext`。                                 |
+
 
 **读表注意**：一旦 REPL 进入上述 coordinator 分支，下面「`getSystemPrompt` 默认非 ant / ant 对照」大表描述的是**被替换掉、不再进 system 数组**的内容；协调器专属正文以 `coordinatorMode.ts` 为准。
 
@@ -67,12 +70,12 @@ messages:       [ getUserContext + getCoordinatorUserContext → 一条 reminder
 | `summarize_tool_results`         | `When working with tool results, write down any important information you might need later in your response, as the original tool result may be cleared later.`，见 [prompts.ts:833](../src/constants/prompts.ts)                                                                                                                                                                           | 同左                                                                                                                                                                                                                                             | 完全相同。                                                                                                                                               |
 | `numeric_length_anchors`         | 无                                                                                                                                                                                                                                                                                                                                                                                         | `Length limits: keep text between tool calls to ≤25 words. Keep final responses to ≤100 words unless the task requires more detail.`，见 [prompts.ts:529](../src/constants/prompts.ts)                                                           | ant-only。很有意思的是，ant 一边强调“写给人看”，另一边又加了数值长度锚点，说明它想要的是“清晰但不要啰嗦”。                                                                                       |
 | `token_budget`                   | 若 `feature('TOKEN_BUDGET')` 打开，返回：`When the user specifies a token target... Keep working until you approach the target...`，见 [prompts.ts:538](../src/constants/prompts.ts)                                                                                                                                                                                                               | 同左                                                                                                                                                                                                                                             | 与 ant 无关，属于预算驱动续跑。                                                                                                                                  |
-| `brief`                          | `...(feature('KAIROS') \|\| feature('KAIROS_BRIEF') ? [systemPromptSection('brief', () => getBriefSection())] : [])`，见 [prompts.ts:552](../src/constants/prompts.ts)                                                                                                                                                                                                                     | 同左                                                                                                                                                                                                                                             | 受 KAIROS/KAIROS_BRIEF 门控；实际字符串内容来自 `getBriefSection()`，非 ant / ant 在这里无直接分支。                                                                                                 |
+| `brief`                          | `...(feature('KAIROS') || feature('KAIROS_BRIEF') ? [systemPromptSection('brief', () => getBriefSection())] : [])`，见 [prompts.ts:552](../src/constants/prompts.ts)                                                                                                                                                                                                                        | 同左                                                                                                                                                                                                                                             | 受 KAIROS/KAIROS_BRIEF 门控；实际字符串内容来自 `getBriefSection()`，非 ant / ant 在这里无直接分支。                                                                        |
 
 
 ## `getSystemContext`
 
-见 `[context.ts](../src/context.ts)` 中 `getSystemContext`（约 113–151 行）。**会话级 memoize**，同一对话只算一次。返回 `Promise<Record<string, string>>`；另若开了 `**BREAK_CACHE_COMMAND`** 且设置了 `setSystemPromptInjection`，可能多一个 `**cacheBreaker`: `[CACHE_BREAKER: …]**`（打断 prompt 缓存，ant 调试向），略过即可。
+见 `[context.ts](../src/context.ts)` 中 `getSystemContext`（约 113–151 行）。**会话级 memoize**，同一对话只算一次。返回 `Promise<Record<string, string>>`；另若开了 `**BREAK_CACHE_COMMAND`** 且设置了 `setSystemPromptInjection`，可能多一个 `**cacheBreaker`: `[CACHE_BREAKER: …]`**（打断 prompt 缓存，ant 调试向），略过即可。
 
 **主体是 `gitStatus` 字符串**（来自同文件里的 `getGitStatus`，约 36–111 行）：满足 **非** `CLAUDE_CODE_REMOTE`、`shouldIncludeGitInstructions()` 为真、且当前目录是 git 仓库且未在测试中出错时，才会放进返回对象。含义是**对话开始瞬间**的仓库快照，**会话内不会刷新**。
 
@@ -97,7 +100,7 @@ messages:       [ getUserContext + getCoordinatorUserContext → 一条 reminder
   - 前缀固定为 `MEMORY_INSTRUCTION_PROMPT`：  
    `Codebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.`  
   - 其后按 `[getMemoryFiles](../src/utils/claudemd.ts)` 得到的 `**MemoryFileInfo[]` 顺序**，每条展开为 `Contents of <path> (说明):\n\n正文`（TeamMem 会包一层 XML），段与段之间 `\n\n` 拼接。  
-  - **顺序含义**：数组为**低优先级 → 高优先级**；**越靠后的文件在全文里越靠后**（通常更「当道」）。概要顺序：**Managed（含托管侧 `.claude/rules/*.md`）→ User（`~/.claude/CLAUDE.md` 与用户 `~/.claude/rules/*.md`）→ 从盘符根沿路径向下直到 CWD**：每层依次 `**CLAUDE.md`**、`**.claude/CLAUDE.md**`、`**.claude/rules/**/*.md**`、`**CLAUDE.local.md**` → 若开启 env，`**--add-dir` 附加目录**上同样四类 → **AutoMem 入口（如 memory.md）** → **TeamMem**。`@include` 会把被包含文件**插到包含文件之前**。`filterInjectedMemoryFiles` 在 GrowthBook `tengu_moth_copse` 为真时可去掉 AutoMem/TeamMem。`context.ts` 里若禁用 CLAUDE 发现（如 `CLAUDE_CODE_DISABLE_CLAUDE_MDS`，或 `--bare` 且无附加目录）则整段 `claudeMd` 不出现。细节以 `claudemd.ts` 文件头注释与 `getMemoryFiles` 实现为准。
+  - **顺序含义**：数组为**低优先级 → 高优先级**；**越靠后的文件在全文里越靠后**（通常更「当道」）。概要顺序：**Managed（含托管侧 `.claude/rules/*.md`）→ User（`~/.claude/CLAUDE.md` 与用户 `~/.claude/rules/*.md`）→ 从盘符根沿路径向下直到 CWD**：每层依次 `**CLAUDE.md`**、`**.claude/CLAUDE.md`**、`**.claude/rules/**/*.md**`、`**CLAUDE.local.md**` → 若开启 env，`**--add-dir` 附加目录**上同样四类 → **AutoMem 入口（如 memory.md）** → **TeamMem**。`@include` 会把被包含文件**插到包含文件之前**。`filterInjectedMemoryFiles` 在 GrowthBook `tengu_moth_copse` 为真时可去掉 AutoMem/TeamMem。`context.ts` 里若禁用 CLAUDE 发现（如 `CLAUDE_CODE_DISABLE_CLAUDE_MDS`，或 `--bare` 且无附加目录）则整段 `claudeMd` 不出现。细节以 `claudemd.ts` 文件头注释与 `getMemoryFiles` 实现为准。
 2. `**currentDate`（必有）**
   `Today's date is ${getLocalISODate()}.`
 
@@ -123,7 +126,7 @@ Workers spawned via the Agent tool have access to these tools: <workerTools>
 - `**CLAUDE_CODE_SIMPLE` 为真时**（字母序）：  
 `Bash, Edit, Read`
 - **否则**（默认）：对 `[ASYNC_AGENT_ALLOWED_TOOLS](../src/constants/tools.ts)` 中每一项，若不在 `[INTERNAL_WORKER_TOOLS](../src/coordinator/coordinatorMode.ts)` 中则保留，再 `.sort().join(', ')`。当前集合与内部 worker 集合的交集实际只有 `**StructuredOutput`**（`SYNTHETIC_OUTPUT_TOOL_NAME`），故等价于从 async 列表去掉该项。按当前源码，结果为（字母序，一行）：  
-  `Bash, Edit, EnterWorktree, ExitWorktree, Glob, Grep, NotebookEdit, PowerShell, Read, Skill, TodoWrite, ToolSearch, WebFetch, WebSearch, Write`
+`Bash, Edit, EnterWorktree, ExitWorktree, Glob, Grep, NotebookEdit, PowerShell, Read, Skill, TodoWrite, ToolSearch, WebFetch, WebSearch, Write`
 
 ---
 

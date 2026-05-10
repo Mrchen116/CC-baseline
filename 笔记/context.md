@@ -157,7 +157,21 @@ user:
 - 定位：`microcompact` 是 `autocompact` 前的一层轻量清理，专门处理旧 `tool_result`；调用点见 [query.ts#L415](../src/query.ts)，实现见 [microCompact.ts](../src/services/compact/microCompact.ts)。
 - 只有在COMPACTABLE_TOOLS内的工具会被压，其他都会跳过！
 - 冷路径：如果距离上一条 assistant 消息超过 60 分钟，就认为服务端 cache 基本过期；这时直接把较老的 `tool_result` 内容清空成 `[Old tool result content cleared]`，只保留最近 5 条，见 [timeBasedMCConfig.ts](../src/services/compact/timeBasedMCConfig.ts)、[microCompact.ts](../src/services/compact/microCompact.ts)。
-- 热路径：设计上是如果 cache 还热且模型支持 cache editing，就不改本地 `messages`，而是生成 `cache_edits` 交给 API 层去删服务端缓存前缀里的旧 `tool_result`；但当前仓库里 `cachedMicrocompact.ts` 是 stub，这条路径现在实际不生效，见 [microCompact.ts](../src/services/compact/microCompact.ts)、[cachedMicrocompact.ts](../src/services/compact/cachedMicrocompact.ts)、[claude.ts](../src/services/api/claude.ts)。
+- 热路径（cached microcompact）：见 [microCompact.ts](../src/services/compact/microCompact.ts)、[cachedMicrocompact.ts](../src/services/compact/cachedMicrocompact.ts)、[claude.ts](../src/services/api/claude.ts)。当前仓库 `cachedMicrocompact.ts` 是 stub，实际不生效。
+  - **进门条件**（只是前置过滤，不决定删不删）：cache 还热（距上次 assistant 不久）+ 模型支持 cache editing + 主线程（非子 agent）。
+  - **触发条件**（真正决定删不删）：**计数触发**。每轮 query 前扫描完整对话历史，把还没登记过的 compactable tool_result 逐个注册进 `cachedMCState`（`toolOrder` 记录注册顺序，`deletedRefs` 记录已被删除的）。当**尚未删除的 compactable tool_result 数量**（`toolOrder.length - deletedRefs.size`）**超过 `triggerThreshold`** 时才触发。
+
+    ```
+    每轮 query 前
+      └─> 扫描 messages，注册新 compactable tool_result
+          └─> 活跃数 = toolOrder.length - deletedRefs.size
+              └─> 活跃数 > triggerThreshold ?
+                  ├─> 是：生成 cache_edits，从最老的批量删，保留最近 keepRecent 条
+                  └─> 否：什么都不做，messages 原样返回
+    ```
+
+  - **配置来源**：`triggerThreshold` 和 `keepRecent` 来自 GrowthBook 远程配置。系统提示语也会提前告知模型 "The N most recent results are always kept"，见 [prompts.ts#L839](../src/constants/prompts.ts)。
+  - **效果**：本地 messages 完全不动，服务端通过 `cache_edits` 在缓存前缀里删掉旧 tool_result，从而保留 prompt cache 命中。
 - 关系：`microcompact` 解决的是“旧工具结果太占上下文”，`autocompact` 解决的是“整体上下文仍然过大”；前者更轻、更偏工具结果专项治理，后者更重。
 
 ### contextCollapse
@@ -190,7 +204,7 @@ user:
 #### session-memory compact [不调用llm]
 
 - 入口：`autocompact` 触发后，会先尝试 `trySessionMemoryCompaction()`；只有这条路失败，才会回退到完整 compact，见 [autoCompact.ts](../src/services/compact/autoCompact.ts)、[sessionMemoryCompact.ts](../src/services/compact/sessionMemoryCompact.ts)。
-- summary 来源：这里不现场重跑“总结整段历史”的 prompt，而是直接读取 session memory 文件 `getSessionMemoryContent()`。这份文件是主线程会话过程中由 post-sampling hook 后台维护的一份 markdown 记忆，见 [sessionMemoryUtils.ts](../src/services/SessionMemory/sessionMemoryUtils.ts)、[sessionMemory.ts](../src/services/SessionMemory/sessionMemory.ts)。
+- summary 来源：这里不现场重跑”总结整段历史”的 prompt，而是直接读取 session memory 文件 `getSessionMemoryContent()`。这份文件是主线程会话过程中由 post-sampling hook 后台维护的一份 markdown 记忆，见 [sessionMemoryUtils.ts](../src/services/SessionMemory/sessionMemoryUtils.ts)、[sessionMemory.ts](../src/services/SessionMemory/sessionMemory.ts)。**这份文件是怎么生成/更新的、用什么 prompt、模板长什么样，详见 [memory.md](./memory.md)**。
 - 边界：`lastSummarizedMessageId` 表示 session memory 大致已经覆盖到哪条消息；compact 时会以它为参考，只保留边界之后的一段最近原始消息，见 [sessionMemoryUtils.ts](../src/services/SessionMemory/sessionMemoryUtils.ts)、[sessionMemoryCompact.ts](../src/services/compact/sessionMemoryCompact.ts)。
 - 最近尾巴：保留的不是固定几条消息，而是`lastSummarizedMessageId`后，一段“足够继续工作”的尾部上下文；默认要求至少保留 `10k` tokens、至少 `5` 条带文本消息，若剩余消息不能满足，则继续往前取`lastSummarizedMessageId`前的消息，直到满足条件为止，并尽量控制在 `40k` tokens 内，同时不能拆开 `tool_use/tool_result` 配对，见 [sessionMemoryCompact.ts](../src/services/compact/sessionMemoryCompact.ts)。
 - 先区分两层：`session-memory compact` 先产出一份本地 `CompactionResult`，其中包含 `boundaryMarker + summaryMessages + messagesToKeep + attachments + hookResults`；但真正发给 LLM 前还会经过 `normalizeMessagesForAPI()`，普通 `system` 消息会被过滤、`attachment` 会被并入 `user` 消息，见 [sessionMemoryCompact.ts](../src/services/compact/sessionMemoryCompact.ts)、[messages.ts](../src/utils/messages.ts)、[query.ts](../src/query.ts)。

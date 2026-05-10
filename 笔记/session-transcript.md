@@ -27,13 +27,30 @@ JSONL 文件不是服务于当前 API 调用的"工作内存"，而是一个**�
 
 这意味着，如果未来有更好的上下文工程方法，可以直接重放 JSONL 重新组织，而无需改变持久化格式。代码里 compaction 不修改 JSONL、只修改"内存中发给 API 的视图"，正是这一哲学的直接体现。
 
-### 1.4 API System Prompt 不持久化
+### 1.4 API System Prompt 不持久化：解耦的另一面
 
-一个常见的误解是：JSONL 既然存了 `type: "system"` 的消息，那系统提示词（system prompt）一定也在里面。实际上 **API 系统提示词从不写入 JSONL**。
+§1.3 讲的是 harness 在"事件出去给模型"这条路径上的自由——可以任意 compact、microcompact、按需筛选。§1.4 讲解耦的**另一面**：harness 每轮拼出来要塞给模型的 system prompt（CC 版本号、git status、CLAUDE.md、动态段、工具列表等），**也全都不写进 JSONL**。
 
-`src/context.ts` 每轮请求前动态组装 system prompt（git status、CLAUDE.md 内容等），在 `src/services/api/claude.ts` 中直接传给 Anthropic SDK，用完即弃。JSONL 里的 `type: "system"` 消息是**终端 UI 元数据**（如 `api_metrics`、`compact_boundary`、`api_error` 等），它们只负责在 resume 后恢复终端状态，不会发给 LLM。
+`src/context.ts` 每轮请求前现场组装一份新的 system prompt，`src/services/api/claude.ts` 直接传给 Anthropic SDK，用完即弃。JSONL 里 `type: "system"` 的消息是终端 UI 元数据（`api_metrics`、`compact_boundary`、`api_error` 等），与 API system prompt 完全无关。
 
-这再次体现了 Anthropic 的设计边界：**JSONL 只记录"发生了什么事件"，不记录"每轮请求时如何组装 prompt"**——prompt 工程属于 harness 的工作内存，不在持久化范围内。
+**为什么这一刀切得这么干净？还是 §1.3 那句话：Anthropic 不能预测未来 context engineering 需要长什么样子。**
+
+如果 system prompt 被持久化进 JSONL，相当于把"现在认为正确的 prompt 拼装方式"冻结到磁盘。任何未来改动都会卡在两难：
+
+1. 让旧 session 永远用旧 prompt——用户体验随版本越拉越差，bug 修了等于没修；
+2. 写迁移脚本批量改写历史 JSONL——破坏 append-only 的崩溃安全保证，还要为每次 prompt 改动维护 migration。
+
+把 system prompt 留在工作内存、每轮重新组装，三个具体好处自然就来了：
+
+- **CC 升级**：旧 session resume 立刻吃到新版 prompt（修过的 bug、调过的 tone、新增的 tool 全部生效），而不是冻结在 session 创建那一刻。
+- **CLAUDE.md 中途改动**：会话进行到一半时改项目根目录的 CLAUDE.md（加了新规约），下一轮自动重读注入，不用重启 session。
+- **git status 持续刷新**：会话期间 commit / 切分支 / 改文件，每轮重新拉一次状态，模型看到的是当下而不是开局快照。
+
+但这些好处都是"派生品"，不是源命题。源命题是这条边界划分本身：
+
+> **API system prompt 反映的是 harness 当下认为该说的话；session 反映的是已经发生过的事实。前者属于"can change"，后者属于"must not change"。把两类东西塞进同一份持久化里，就是把可演进性和可恢复性绑死。**
+
+Anthropic 选择把它们分开——session 严格记录事件，harness 永远按最新规则现场组装。这条边界划完之后，prompt 怎么改、模型怎么换、上下文工程怎么演进，都不再绑架持久化格式。
 
 ### 1.5 通过 `getEvents()` 任意选择历史切片
 
@@ -271,7 +288,87 @@ A → B → C → D
 
 ---
 
-## 6. 设计权衡
+## 6. 写入示例：正常对话与压缩场景
+
+以下用简化后的 JSONL 行展示两个典型场景，帮助理解文件里实际会出现什么内容。**每行都是独立 JSON，按时间顺序追加。**
+
+### 6.1 场景 A：正常 Agent 工作（一轮工具调用）
+
+用户问 "帮我列出当前目录的文件"，Claude 调用 `BashTool` 执行 `ls`，然后返回结果。
+
+**这一轮的 yield 流程与 JSONL 写入关系：**
+
+- 用户发送消息 → `REPL.tsx` 直接 `setMessages` + `recordTranscript` → **JSONL 写入第 1 行（user）**
+- `query()` 调 API，流式输出过程中 yield 大量 `stream_event` → **不写 JSONL**，只更新 UI 显示长度
+- yield 完整 `assistant` 消息（含 `tool_use` block）→ **JSONL 写入第 2 行（assistant）**
+- 工具执行完成，yield `user` 消息（含 `tool_result` block）→ **JSONL 写入第 3 行（tool_result）**
+- 递归进入下一轮 API，再 yield `stream_event` → **不写 JSONL**
+- 最后 yield `assistant` 最终回复 → **JSONL 写入第 4 行（assistant）**
+
+对应的 JSONL 内容：
+
+```jsonl
+{"type":"user","uuid":"u-001","sessionId":"sess-abc","timestamp":"2026-05-08T10:00:00Z","version":"2.1.888","cwd":"/home/user/project","parentUuid":null,"message":{"role":"user","content":[{"type":"text","text":"帮我列出当前目录的文件"}]}}
+{"type":"assistant","uuid":"a-002","sessionId":"sess-abc","timestamp":"2026-05-08T10:00:03Z","version":"2.1.888","cwd":"/home/user/project","parentUuid":"u-001","message":{"role":"assistant","id":"msg-002","content":[{"type":"tool_use","id":"tu-001","name":"BashTool","input":{"command":"ls -la"}}],"usage":{"input_tokens":145,"output_tokens":25}}}
+{"type":"user","uuid":"u-003","sessionId":"sess-abc","timestamp":"2026-05-08T10:00:04Z","version":"2.1.888","cwd":"/home/user/project","parentUuid":"a-002","toolUseResult":"total 128\ndrwxr-xr-x  5 user user 4096 May  8 09:00 .\n...","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-001","content":"total 128\ndrwxr-xr-x  5 user user 4096 May  8 09:00 .\n..."}]}}
+{"type":"assistant","uuid":"a-004","sessionId":"sess-abc","timestamp":"2026-05-08T10:00:06Z","version":"2.1.888","cwd":"/home/user/project","parentUuid":"u-003","message":{"role":"assistant","id":"msg-004","content":[{"type":"text","text":"当前目录共有 12 个文件和文件夹..."}],"usage":{"input_tokens":680,"output_tokens":120}}}
+```
+
+**要点**
+
+- 一次 `yield` 只产出一个事件，`postCompactMessages` 是用循环逐个 `yield message` 的。
+- `stream_event`（token 增量）yield 时不写 JSONL，只更新响应长度；只有完整消息才走 `onMessage` → `setMessages` → `recordTranscript`。
+- 所有消息通过 `parentUuid` 形成单链表：`u-001 → a-002 → u-003 → a-004`。
+- `usage.input_tokens` 在每条 assistant message 上记录，是 `finalContextTokensFromLastResponse` 读取的数据源。
+
+### 6.2 场景 B：触发压缩（AutoCompact）后
+
+假设上述对话又进行了 20 轮，上下文膨胀到 180K tokens，触发了 autocompact。
+
+**这一轮的 yield 流程：**
+
+- `deps.autocompact()` 成功返回 `compactionResult`
+- `query()` 用 `buildPostCompactMessages(result)` 组装出 4 条消息
+- 循环 yield 这 4 条消息，每条独立消费、独立写盘
+- 旧历史（前面 20+ 轮）**不会被删除或修改**
+
+压缩前文件尾部（最后两条）：
+
+```jsonl
+// ... 前面 20+ 轮的对话历史仍然保留在文件中
+{"type":"assistant","uuid":"a-042","sessionId":"sess-abc","timestamp":"2026-05-08T10:25:00Z","version":"2.1.888","cwd":"/home/user/project","parentUuid":"u-042","message":{"role":"assistant",...}}
+{"type":"user","uuid":"u-043","sessionId":"sess-abc","timestamp":"2026-05-08T10:25:30Z","version":"2.1.888","cwd":"/home/user/project","parentUuid":"a-042","message":{"role":"user","content":[{"type":"text","text":"继续优化那个函数"}]}}
+```
+
+触发压缩后，文件**继续追加** 4 行（`buildPostCompactMessages` 的顺序）：
+
+```jsonl
+{"type":"system","uuid":"cb-001","sessionId":"sess-abc","timestamp":"2026-05-08T10:25:35Z","version":"2.1.888","cwd":"/home/user/project","parentUuid":"u-043","content":[{"type":"text","text":"Compact boundary"}],"compactMetadata":{"turnId":"compact-001","turnCounter":0,"preCompactTokenCount":182400,"postCompactTokenCount":12400,"compactionModel":"claude-3-5-haiku-20241022"}}
+{"type":"assistant","uuid":"sum-001","sessionId":"sess-abc","timestamp":"2026-05-08T10:25:35Z","version":"2.1.888","cwd":"/home/user/project","parentUuid":"cb-001","isCompactSummary":true,"message":{"role":"assistant","id":"msg-sum-001","content":[{"type":"text","text":"Summary of previous conversation: The user asked me to list files, then modify src/utils.ts, then add tests. Key decisions: used BashTool for ls, FileEditTool for refactoring, created 3 new test cases in src/utils.test.ts."}]}}
+{"type":"user","uuid":"att-001","sessionId":"sess-abc","timestamp":"2026-05-08T10:25:35Z","version":"2.1.888","cwd":"/home/user/project","parentUuid":"sum-001","attachment":{"type":"edited_text_file","filePath":"src/utils.ts","diff":"@@ -10,7 +10,7 @@..."}}
+{"type":"user","uuid":"att-002","sessionId":"sess-abc","timestamp":"2026-05-08T10:25:35Z","version":"2.1.888","cwd":"/home/user/project","parentUuid":"att-001","attachment":{"type":"memory","memoryId":"memory-003","content":"User prefers snake_case for function names"}}
+```
+
+**压缩后的关键变化**
+
+1. **旧历史未被删除**：`a-042`、`u-043` 以及前面所有轮次仍然留在 JSONL 文件中，resume 时通过 `compact_boundary` 的 `turnId` 跳过它们。
+2. **插入 compact_boundary 系统消息**：`cb-001` 标记压缩边界，记录 `preCompactTokenCount`（182K）和 `postCompactTokenCount`（12.4K）。
+3. **插入摘要消息**：`sum-001` 是 `isCompactSummary: true` 的 assistant 消息，后续 API 调用时替代被摘要掉的 20 轮历史。
+4. **附件保留**：被修改的文件（`edited_text_file`）和重要 memory 作为 `attachment` 类型消息保留。
+5. **parentUuid 重新链式连接**：`u-043.parentUuid = a-042`，`cb-001.parentUuid = u-043`，`sum-001.parentUuid = cb-001`，形成新逻辑链。resume 时从最新 leaf 往回追，经过边界标记找到摘要，然后跳过边界之前的旧历史。
+
+### 6.3 对比总结
+
+| 维度 | 正常对话 | 触发压缩后 |
+|------|---------|-----------|
+| **旧历史** | 自然追加 | **保留**，不被删除或修改 |
+| **新写入内容** | user / assistant / tool_result | `compact_boundary` + `summary` + `attachments` + `hookResults` |
+| **API 上下文** | 完整历史 | 摘要 + 保留附件 + 最近几轮 |
+| **文件大小** | 持续增长 | 仍然增长（append-only），但 resume 加载时利用 boundary 跳读 |
+| **`taskBudgetRemaining`** | 不涉及 | 用 `preCompactTokenCount` 扣减，补偿服务端"看不到的历史" |
+| **yield 次数** | 多轮 yield（stream_event + 完整消息交替） | compact 后额外 yield 4 条 post-compact 消息 |
+
+## 7. 设计权衡
 
 | 选择 | 原因 |
 |------|------|
