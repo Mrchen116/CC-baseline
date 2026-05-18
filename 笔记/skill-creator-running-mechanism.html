@@ -18,929 +18,628 @@
       --soft: #eef4ef;
       --soft-blue: #e8f1f5;
       --warn: #fff4e6;
+      --pink: #fbeef0;
     }
-
     * { box-sizing: border-box; }
-
     body {
-      margin: 0;
-      background: var(--bg);
-      color: var(--ink);
+      margin: 0; background: var(--bg); color: var(--ink);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "PingFang SC", Arial, sans-serif;
       line-height: 1.72;
     }
-
-    article {
-      max-width: 1080px;
-      margin: 0 auto;
-      padding: 48px 24px 72px;
-    }
-
-    header {
-      border-bottom: 1px solid var(--line);
-      padding-bottom: 28px;
-      margin-bottom: 34px;
-    }
-
-    .eyebrow {
-      color: var(--accent);
-      font-size: 14px;
-      font-weight: 700;
-      letter-spacing: .04em;
-      text-transform: uppercase;
-    }
-
-    h1 {
-      font-size: clamp(32px, 5vw, 56px);
-      line-height: 1.12;
-      margin: 12px 0 16px;
-      letter-spacing: 0;
-    }
-
-    h2 {
-      font-size: 30px;
-      line-height: 1.25;
-      margin: 44px 0 14px;
-      letter-spacing: 0;
-    }
-
-    h3 {
-      font-size: 21px;
-      margin: 30px 0 10px;
-      letter-spacing: 0;
-    }
-
+    article { max-width: 1080px; margin: 0 auto; padding: 48px 24px 72px; }
+    header { border-bottom: 1px solid var(--line); padding-bottom: 28px; margin-bottom: 34px; }
+    .eyebrow { color: var(--accent); font-size: 14px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+    h1 { font-size: clamp(32px, 5vw, 52px); line-height: 1.12; margin: 12px 0 16px; }
+    h2 { font-size: 28px; line-height: 1.25; margin: 44px 0 14px; }
+    h3 { font-size: 20px; margin: 28px 0 10px; }
+    h4 { font-size: 16px; margin: 18px 0 8px; color: var(--accent); }
     p { margin: 12px 0; }
-
     code {
-      background: var(--code-bg);
-      color: #102a43;
-      padding: 2px 6px;
-      border-radius: 5px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-      font-size: .92em;
+      background: var(--code-bg); color: #102a43; padding: 2px 6px; border-radius: 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em;
     }
-
     pre {
-      overflow: auto;
-      background: #0f1720;
-      color: #e6edf3;
-      padding: 18px;
-      border-radius: 8px;
-      line-height: 1.55;
-      font-size: 14px;
+      overflow: auto; background: #0f1720; color: #e6edf3; padding: 16px; border-radius: 8px;
+      line-height: 1.55; font-size: 13.5px;
     }
-
-    pre code {
-      background: transparent;
-      color: inherit;
-      padding: 0;
-      border-radius: 0;
-    }
-
+    pre code { background: transparent; color: inherit; padding: 0; }
     table {
-      width: 100%;
-      border-collapse: collapse;
-      margin: 18px 0 24px;
-      background: var(--paper);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      overflow: hidden;
-      display: table;
+      width: 100%; border-collapse: collapse; margin: 18px 0 24px;
+      background: var(--paper); border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
     }
-
-    th, td {
-      border-bottom: 1px solid var(--line);
-      padding: 12px 14px;
-      text-align: left;
-      vertical-align: top;
-    }
-
-    th {
-      background: #23323a;
-      color: white;
-      font-weight: 650;
-    }
-
+    th, td { border-bottom: 1px solid var(--line); padding: 11px 14px; text-align: left; vertical-align: top; font-size: 14.5px; }
+    th { background: #23323a; color: white; font-weight: 650; }
     tr:last-child td { border-bottom: 0; }
-
-    .lead {
-      font-size: 20px;
-      color: #394150;
-      max-width: 850px;
-    }
-
+    .lead { font-size: 19px; color: #394150; max-width: 850px; }
     .note {
-      border-left: 4px solid var(--accent);
-      background: var(--soft-blue);
-      padding: 14px 18px;
-      border-radius: 0 8px 8px 0;
-      margin: 18px 0;
+      border-left: 4px solid var(--accent); background: var(--soft-blue);
+      padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 18px 0;
     }
-
-    .callout {
-      background: var(--soft);
-      border: 1px solid #cad8c8;
-      border-radius: 8px;
-      padding: 18px;
-      margin: 20px 0;
+    .note.warn { border-left-color: var(--accent-2); background: var(--warn); }
+    .note.green { border-left-color: var(--green); background: var(--soft); }
+    .callout { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 18px 22px; margin: 18px 0; }
+    .role-card {
+      background: var(--paper); border: 1px solid var(--line); border-radius: 8px;
+      padding: 16px 18px; margin: 10px 0;
     }
-
-    .warning {
-      background: var(--warn);
-      border-color: #e0bc8d;
+    .role-card h4 { margin-top: 0; }
+    .role-card .meta {
+      display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; font-size: 13px; color: var(--muted);
     }
-
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 14px;
-      margin: 20px 0;
-    }
-
-    .card {
-      background: var(--paper);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 18px;
-    }
-
-    .card strong {
-      display: block;
-      margin-bottom: 8px;
-      color: var(--accent);
-    }
-
-    .file-map {
-      display: grid;
-      grid-template-columns: 1.1fr 1.5fr;
-      gap: 16px;
-      margin: 22px 0;
-    }
-
+    .role-card .meta span { background: var(--code-bg); padding: 2px 8px; border-radius: 999px; }
     .tree {
-      background: #101820;
-      color: #e9f1f7;
-      border-radius: 8px;
-      padding: 18px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 14px;
-      white-space: pre;
-      overflow: auto;
+      background: #101820; color: #e9f1f7; border-radius: 8px; padding: 18px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13.5px;
+      white-space: pre; overflow: auto;
     }
-
-    .diagram {
-      background: var(--paper);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 18px;
-      margin: 22px 0;
-      overflow: auto;
+    .diagram { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 18px; margin: 22px 0; overflow: auto; }
+    .diagram-title { font-weight: 700; color: var(--accent); margin-bottom: 8px; }
+    .diagram svg { width: 100%; height: auto; display: block; }
+    svg text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", Arial, sans-serif; fill: var(--ink); }
+    .figure-caption { color: var(--muted); font-size: 13.5px; margin-top: 10px; }
+    .step {
+      background: var(--paper); border: 1px solid var(--line); border-left: 4px solid var(--accent);
+      border-radius: 6px; padding: 14px 18px; margin: 12px 0;
     }
-
-    .diagram-title {
-      font-weight: 700;
-      color: var(--accent);
-      margin-bottom: 8px;
+    .step .who {
+      display: inline-block; background: var(--soft-blue); color: var(--accent);
+      font-size: 12px; padding: 2px 9px; border-radius: 999px; font-weight: 600; margin-right: 8px;
     }
-
-    .diagram svg {
-      width: 100%;
-      height: auto;
-      display: block;
-    }
-
-    svg text {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", Arial, sans-serif;
-      fill: var(--ink);
-    }
-
-    .figure-caption {
-      color: var(--muted);
-      font-size: 14px;
-      margin-top: 10px;
-    }
-
-    .artifact-grid {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 10px;
-      margin: 18px 0;
-    }
-
-    .artifact {
-      background: var(--paper);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 14px;
-      min-height: 118px;
-    }
-
-    .artifact b { display: block; margin-bottom: 8px; }
-
-    .pill {
-      display: inline-block;
-      border: 1px solid var(--line);
-      background: var(--paper);
-      border-radius: 999px;
-      padding: 3px 10px;
-      font-size: 13px;
-      color: var(--muted);
-      margin: 2px 4px 2px 0;
-    }
-
+    .step .who.sub { background: #f3e8ee; color: #8a3b5a; }
+    .step .who.bash { background: #eef4ef; color: var(--green); }
+    .step .who.user { background: var(--warn); color: var(--accent-2); }
     @media (max-width: 760px) {
       article { padding: 28px 16px 56px; }
-      h1 { font-size: 34px; }
-      h2 { font-size: 25px; }
-      .grid, .file-map, .artifact-grid { grid-template-columns: 1fr; }
-      th, td { padding: 10px; }
+      h1 { font-size: 32px; } h2 { font-size: 23px; }
     }
   </style>
 </head>
 <body>
 <article>
-  <header>
-    <div class="eyebrow">Anthropic skill-creator</div>
-    <h1>skill-creator 运行机制拆解：把 skill 当成可评估的工程资产</h1>
-    <p class="lead">
-      <code>skill-creator</code> 不是简单的模板生成器。它更像一条围绕 skill 的小型 CI 流水线：
-      先定义触发意图，再写 <code>SKILL.md</code>，然后用测试提示词、基线对照、评分器、HTML 审阅器和
-      description 优化器不断迭代。
-    </p>
-  </header>
+<header>
+  <div class="eyebrow">Anthropic · skill-creator</div>
+  <h1>skill-creator 运行机制：谁在跑什么、什么时候跑</h1>
+  <p class="lead">
+    <code>skill-creator</code> 不是一段 prompt 模板，而是一套"主 agent 加多个 subagent + 几个 Python 脚本"
+    的协作流程。本笔记的目标是：让一个熟悉 Claude Code agent 但没读过这个 skill 源码的读者，
+    顺着读下来能搞清楚——<strong>每一步是谁在执行、何时被触发、读什么文件、写什么文件</strong>。
+  </p>
+</header>
 
-  <section>
-    <h2>一、先给结论：它不是模板生成器，而是 skill 的 CI 流水线</h2>
-    <p>
-      普通的 prompt 工程通常止步于“写一段更好的说明”。<code>skill-creator</code> 的思路更工程化：
-      把 skill 看成一个可以被触发、执行、评测、对照、复盘、再发布的能力模块。
-    </p>
-    <div class="grid">
-      <div class="card">
-        <strong>创建</strong>
-        先问清楚 skill 要解决什么任务、什么时候触发、输出格式是什么、成功标准是什么。
-      </div>
-      <div class="card">
-        <strong>评测</strong>
-        对同一批 eval 同时跑 with-skill 和 baseline，再用 grader、benchmark、viewer 判断是否真的变好。
-      </div>
-      <div class="card">
-        <strong>优化</strong>
-        根据人类反馈和失败样本修改 <code>SKILL.md</code>、脚本、示例和 description，进入下一轮 iteration。
-      </div>
-    </div>
-    <p>
-      如果把普通 prompt 看成“手写操作说明”，skill 更接近“带文档、脚本、测试、发布包的能力模块”。
-      这也是它最像深度学习调参的地方：eval set 是数据集，assertions 是监督信号，with-skill/baseline 是消融实验，
-      viewer 是人工标注界面，description 优化则像一个小型路由分类器实验。
-    </p>
-  </section>
+<!-- ============================================================== -->
+<section>
+<h2>1 · 先把"谁是谁"理清楚</h2>
 
-  <section>
-    <h2>二、先看全局：skill-creator 的完整闭环</h2>
-    <p>
-      在拆 eval、grader、description 优化之前，先看整张地图。主流程是：
-      先产出一个可测试的 skill，再用评估循环打磨能力质量，最后优化 description 的触发边界并打包发布。
-    </p>
+<p>整个流程里出现的"agent / 脚本"分成三类。所有看起来神秘的 <code>grader</code> / <code>analyzer</code> / <code>comparator</code> 其实都是
+<strong>主 agent 用 Task 工具临时派出去的 subagent</strong>，它们的"系统提示词"就是 <code>agents/*.md</code> 那几个文件里的内容；
+描述优化阶段又有一组完全不同的角色，它们是 <strong>Python 脚本通过 <code>claude -p</code> subprocess 跑起来的独立 Claude 进程</strong>，
+和 Task subagent 没有关系。</p>
 
-    <div class="diagram">
-      <div class="diagram-title">图 1：skill-creator 的 whole picture</div>
-      <svg viewBox="0 0 900 820" role="img" aria-label="skill creator whole picture">
-        <defs>
-          <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-            <path d="M0,0 L0,6 L9,3 z" fill="#276f86"></path>
-          </marker>
-          <marker id="arrowBrown" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-            <path d="M0,0 L0,6 L9,3 z" fill="#8a5a2b"></path>
-          </marker>
-        </defs>
+<div class="role-card">
+  <h4>① 主 Agent（当前 Claude Code 会话）</h4>
+  <p>用户在 Claude Code 里说"帮我做一个 skill"，触发了 <code>skill-creator</code> 这个 skill。当前这个会话就成为<strong>主 agent</strong>。
+  它把 <code>SKILL.md</code>（32K）当剧本读，按里面写的步骤推进流程：跟用户访谈、写 draft、生成 eval 文件、派 subagent、跑脚本、汇报结果。</p>
+  <div class="meta"><span>剧本：SKILL.md</span><span>身份：当前 Claude Code 会话</span><span>触发：用户调用 /skill-creator</span></div>
+</div>
 
-        <rect x="40" y="40" width="820" height="150" rx="12" fill="#ffffff" stroke="#d8ddd2"></rect>
-        <text x="65" y="76" font-size="16" font-weight="700" fill="#276f86">A. Draft：先产出一个可测试的 skill</text>
-        <rect x="78" y="105" width="190" height="55" rx="8" fill="#e8f1f5" stroke="#a9c5d0"></rect>
-        <text x="173" y="130" text-anchor="middle" font-size="13" font-weight="700">1. 捕获意图</text>
-        <text x="173" y="150" text-anchor="middle" font-size="12">任务 / 触发 / 输出</text>
-        <line x1="268" y1="133" x2="318" y2="133" stroke="#276f86" stroke-width="3" marker-end="url(#arrow)"></line>
-        <rect x="325" y="105" width="190" height="55" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
-        <text x="420" y="130" text-anchor="middle" font-size="13" font-weight="700">2. 写 SKILL.md</text>
-        <text x="420" y="150" text-anchor="middle" font-size="12">说明 + 资源指针</text>
-        <line x1="515" y1="133" x2="565" y2="133" stroke="#276f86" stroke-width="3" marker-end="url(#arrow)"></line>
-        <rect x="572" y="105" width="190" height="55" rx="8" fill="#eef4ef" stroke="#b8cdb4"></rect>
-        <text x="667" y="130" text-anchor="middle" font-size="13" font-weight="700">3. 生成 eval set</text>
-        <text x="667" y="150" text-anchor="middle" font-size="12">真实 prompt + 文件</text>
+<div class="role-card">
+  <h4>② Task Subagent（主 agent 用 Task 工具派出去的临时子会话）</h4>
+  <p>主 agent 在评测阶段会派出四种角色的 subagent。每个 subagent 是一个独立的 Claude 进程，<strong>带着主 agent 写在 Task 工具 prompt 里的指令</strong>启动，
+  执行完一次性返回结果。<code>agents/grader.md</code> / <code>analyzer.md</code> / <code>comparator.md</code> 是给主 agent 看的——
+  主 agent 读完后，把里面的"Role / Process / Output Format"原样塞进 Task 调用的 prompt 里，subagent 才会按那套规则行事。</p>
+  <table>
+    <thead><tr><th>角色</th><th>啥时候被派</th><th>读什么 / 写什么</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Executor</strong>（with_skill / baseline）</td>
+          <td>B 阶段 Step 1：对每个 eval case，主 agent 在同一个 turn 里成对派出</td>
+          <td>读 eval prompt + skill path；写 <code>outputs/</code> + <code>transcript</code></td></tr>
+      <tr><td><strong>Grader</strong></td>
+          <td>B 阶段 Step 4：所有 executor 跑完后，对每个 run 派一个（也可以主 agent 自己 inline 打分）</td>
+          <td>读 <code>agents/grader.md</code>（作为指令）+ transcript + outputs；写 <code>grading.json</code></td></tr>
+      <tr><td><strong>Analyzer</strong>（benchmark 模式）</td>
+          <td>B 阶段 Step 4：benchmark 聚合完成后派一个</td>
+          <td>读 <code>agents/analyzer.md</code> 的 "Analyzing Benchmark Results" 段 + <code>benchmark.json</code>；写 notes 数组</td></tr>
+      <tr><td><strong>Comparator</strong> + <strong>Analyzer</strong>（post-hoc 模式）</td>
+          <td>可选高级流程：用户要做盲评 A/B 时</td>
+          <td>读 <code>agents/comparator.md</code> / <code>analyzer.md</code> + 两份 output；先盲判赢家，再分析为什么赢</td></tr>
+    </tbody>
+  </table>
+</div>
 
-        <rect x="40" y="220" width="820" height="310" rx="12" fill="#ffffff" stroke="#d8ddd2"></rect>
-        <text x="65" y="258" font-size="16" font-weight="700">B. Evaluate：这个 skill 用起来是否真的更好？</text>
-        <rect x="95" y="310" width="170" height="62" rx="8" fill="#eef4ef" stroke="#b8cdb4"></rect>
-        <text x="180" y="336" text-anchor="middle" font-size="13" font-weight="700">4A. with_skill</text>
-        <text x="180" y="356" text-anchor="middle" font-size="12">当前 skill 执行</text>
-        <rect x="95" y="410" width="170" height="62" rx="8" fill="#fff4e6" stroke="#e0bc8d"></rect>
-        <text x="180" y="436" text-anchor="middle" font-size="13" font-weight="700">4B. baseline</text>
-        <text x="180" y="456" text-anchor="middle" font-size="12">不用 skill / 旧 skill</text>
-        <line x1="265" y1="341" x2="340" y2="385" stroke="#276f86" stroke-width="3" marker-end="url(#arrow)"></line>
-        <line x1="265" y1="441" x2="340" y2="397" stroke="#276f86" stroke-width="3" marker-end="url(#arrow)"></line>
-        <rect x="350" y="355" width="150" height="75" rx="8" fill="#e8f1f5" stroke="#a9c5d0"></rect>
-        <text x="425" y="385" text-anchor="middle" font-size="14" font-weight="700">5. Grader</text>
-        <text x="425" y="407" text-anchor="middle" font-size="12">assertions 判分</text>
-        <line x1="500" y1="392" x2="565" y2="392" stroke="#276f86" stroke-width="3" marker-end="url(#arrow)"></line>
-        <rect x="575" y="355" width="145" height="75" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
-        <text x="647" y="385" text-anchor="middle" font-size="14" font-weight="700">6. Benchmark</text>
-        <text x="647" y="407" text-anchor="middle" font-size="12">pass / time / token</text>
-        <line x1="720" y1="392" x2="770" y2="392" stroke="#276f86" stroke-width="3" marker-end="url(#arrow)"></line>
-        <rect x="775" y="355" width="65" height="75" rx="8" fill="#fff4e6" stroke="#e0bc8d"></rect>
-        <text x="807" y="385" text-anchor="middle" font-size="14" font-weight="700">7. Viewer</text>
-        <text x="807" y="407" text-anchor="middle" font-size="12">人工反馈</text>
-        <path d="M807 430 L807 500 L420 500 L420 170" fill="none" stroke="#8a5a2b" stroke-width="3" marker-end="url(#arrowBrown)"></path>
-        <text x="455" y="488" font-size="12" fill="#8a5a2b">不满意：修改 SKILL.md / scripts / examples，再跑下一轮</text>
+<div class="role-card">
+  <h4>③ Python 脚本 + <code>claude -p</code> subprocess（C 阶段专用）</h4>
+  <p>描述优化阶段不用 Task subagent。它是主 agent 在 Bash 里跑 <code>python -m scripts.run_loop</code>，
+  这个脚本内部并发派出几十个 <code>claude -p &lt;query&gt;</code> subprocess（每个都是一个独立的 Claude Code 进程），
+  专门检测某个 description 会不会触发这个 skill。这套机制和 Task subagent 完全独立。</p>
+  <div class="meta"><span>脚本：scripts/run_loop.py</span><span>底层：subprocess.Popen("claude -p ...")</span><span>并发：ProcessPoolExecutor</span></div>
+</div>
 
-        <rect x="40" y="565" width="405" height="150" rx="12" fill="#ffffff" stroke="#a9c5d0"></rect>
-        <text x="65" y="603" font-size="16" font-weight="700" fill="#276f86">C. Trigger：触发质量循环</text>
-        <text x="65" y="627" font-size="12" fill="#667085">问题：该触发时触发，不该触发时不触发</text>
-        <rect x="80" y="660" width="100" height="42" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
-        <text x="130" y="686" text-anchor="middle" font-size="12" font-weight="700">desc eval</text>
-        <line x1="180" y1="681" x2="230" y2="681" stroke="#276f86" stroke-width="3" marker-end="url(#arrow)"></line>
-        <rect x="238" y="660" width="100" height="42" rx="8" fill="#e8f1f5" stroke="#a9c5d0"></rect>
-        <text x="288" y="686" text-anchor="middle" font-size="12" font-weight="700">run_eval</text>
-        <line x1="338" y1="681" x2="380" y2="681" stroke="#276f86" stroke-width="3" marker-end="url(#arrow)"></line>
-        <rect x="386" y="660" width="45" height="42" rx="8" fill="#eef4ef" stroke="#b8cdb4"></rect>
-        <text x="408" y="686" text-anchor="middle" font-size="12" font-weight="700">改描述</text>
+<div class="note">
+<strong>结论先讲：</strong> 笔记里之后出现 "Grader 跑了"" Analyzer 跑了" 这种描述，意思都是
+<em>主 agent 在那一步用 Task 工具开了一个 subagent，把 <code>agents/&lt;name&gt;.md</code> 里的内容当 prompt 塞进去</em>。
+Grader / Analyzer / Comparator 不是常驻进程，也不是 cron 调度的——它们就是一次性的 Task 调用。
+</div>
+</section>
 
-        <rect x="500" y="565" width="360" height="150" rx="12" fill="#ffffff" stroke="#d8ddd2"></rect>
-        <text x="525" y="603" font-size="16" font-weight="700">D. Ship：发布</text>
-        <text x="525" y="627" font-size="12" fill="#667085">description 和能力都满意后再发布</text>
-        <rect x="555" y="660" width="130" height="42" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
-        <text x="620" y="686" text-anchor="middle" font-size="12" font-weight="700">quick_validate.py</text>
-        <line x1="685" y1="681" x2="735" y2="681" stroke="#276f86" stroke-width="3" marker-end="url(#arrow)"></line>
-        <rect x="742" y="660" width="90" height="42" rx="8" fill="#eef4ef" stroke="#b8cdb4"></rect>
-        <text x="787" y="686" text-anchor="middle" font-size="12" font-weight="700">package .skill</text>
-      </svg>
-      <p class="figure-caption">
-        读后面的细节时可以反复回到这张图定位：第三节是源码目录地图；第四节讲 Draft；第五节讲 eval set 和 with-skill/baseline；
-        第六节讲 grader、benchmark、viewer；第七节讲 description 触发质量循环。
-      </p>
-    </div>
-  </section>
+<!-- ============================================================== -->
+<section>
+<h2>2 · 全局流程图</h2>
 
-  <section>
-    <h2>三、源码目录地图：每个文件支撑流程图里的哪一段</h2>
-    <p>
-      这个目录本身是全局地图，不属于 A 阶段。更准确的理解是：
-      <code>SKILL.md</code> 是总控剧本，<code>scripts/</code> 是自动化执行器，
-      <code>agents/</code> 是评审角色，<code>references/</code> 定义数据协议，
-      <code>eval-viewer/</code> 和 <code>assets/</code> 负责把结果交给人审。
-    </p>
+<div class="diagram">
+<div class="diagram-title">图 1：四个阶段 + 谁在每一步执行</div>
+<svg viewBox="0 0 980 720" role="img">
+  <defs>
+    <marker id="ar" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#276f86"/></marker>
+    <marker id="arBack" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#8a5a2b"/></marker>
+  </defs>
 
-    <div class="file-map">
-      <div class="tree">skill-creator/
-├── SKILL.md                         # 总控流程：创建、评测、改进、触发优化、打包
+  <!-- A Draft -->
+  <rect x="20" y="20" width="940" height="130" rx="10" fill="#ffffff" stroke="#a9c5d0"/>
+  <text x="40" y="50" font-size="15" font-weight="700" fill="#276f86">A · Draft（主 agent 直接做）</text>
+  <rect x="50" y="70" width="190" height="60" rx="6" fill="#e8f1f5" stroke="#a9c5d0"/>
+  <text x="145" y="95" text-anchor="middle" font-size="13" font-weight="700">访谈用户</text>
+  <text x="145" y="115" text-anchor="middle" font-size="12">捕获意图 / 边界</text>
+  <line x1="240" y1="100" x2="290" y2="100" stroke="#276f86" stroke-width="2.5" marker-end="url(#ar)"/>
+  <rect x="295" y="70" width="190" height="60" rx="6" fill="#ffffff" stroke="#d8ddd2"/>
+  <text x="390" y="95" text-anchor="middle" font-size="13" font-weight="700">写 SKILL.md draft</text>
+  <text x="390" y="115" text-anchor="middle" font-size="12">name + description + body</text>
+  <line x1="485" y1="100" x2="535" y2="100" stroke="#276f86" stroke-width="2.5" marker-end="url(#ar)"/>
+  <rect x="540" y="70" width="195" height="60" rx="6" fill="#eef4ef" stroke="#b8cdb4"/>
+  <text x="637" y="95" text-anchor="middle" font-size="13" font-weight="700">生成 2-3 个测试 prompt</text>
+  <text x="637" y="115" text-anchor="middle" font-size="12">写入 evals/evals.json</text>
+  <line x1="735" y1="100" x2="785" y2="100" stroke="#276f86" stroke-width="2.5" marker-end="url(#ar)"/>
+  <rect x="790" y="70" width="150" height="60" rx="6" fill="#fff4e6" stroke="#e0bc8d"/>
+  <text x="865" y="95" text-anchor="middle" font-size="13" font-weight="700">用户确认</text>
+  <text x="865" y="115" text-anchor="middle" font-size="12">prompts 看着合理吗</text>
+
+  <!-- B Evaluate -->
+  <rect x="20" y="170" width="940" height="300" rx="10" fill="#ffffff" stroke="#a9c5d0"/>
+  <text x="40" y="200" font-size="15" font-weight="700" fill="#276f86">B · Evaluate（主 agent 派 subagent + 跑 Python 聚合脚本）</text>
+
+  <!-- Step 1: spawn executors -->
+  <rect x="50" y="220" width="280" height="80" rx="6" fill="#f3e8ee" stroke="#c79bb0"/>
+  <text x="190" y="245" text-anchor="middle" font-size="13" font-weight="700">Step 1 · 并行派 Executor subagent</text>
+  <text x="190" y="265" text-anchor="middle" font-size="12">每个 eval case 一对：</text>
+  <text x="190" y="282" text-anchor="middle" font-size="12">with_skill + baseline（同 turn 内）</text>
+
+  <line x1="330" y1="260" x2="380" y2="260" stroke="#276f86" stroke-width="2.5" marker-end="url(#ar)"/>
+
+  <!-- Step 2: while waiting, draft assertions -->
+  <rect x="385" y="220" width="240" height="80" rx="6" fill="#e8f1f5" stroke="#a9c5d0"/>
+  <text x="505" y="245" text-anchor="middle" font-size="13" font-weight="700">Step 2 · 等待期间，主 agent</text>
+  <text x="505" y="265" text-anchor="middle" font-size="12">起草 assertions（判分标准）</text>
+  <text x="505" y="282" text-anchor="middle" font-size="12">写回 eval_metadata.json</text>
+
+  <line x1="625" y1="260" x2="675" y2="260" stroke="#276f86" stroke-width="2.5" marker-end="url(#ar)"/>
+
+  <!-- Step 3: collect timing -->
+  <rect x="680" y="220" width="240" height="80" rx="6" fill="#eef4ef" stroke="#b8cdb4"/>
+  <text x="800" y="245" text-anchor="middle" font-size="13" font-weight="700">Step 3 · 收 timing notification</text>
+  <text x="800" y="265" text-anchor="middle" font-size="12">每个 executor 完成时</text>
+  <text x="800" y="282" text-anchor="middle" font-size="12">立刻写 timing.json</text>
+
+  <line x1="190" y1="300" x2="190" y2="335" stroke="#276f86" stroke-width="2.5" marker-end="url(#ar)"/>
+
+  <!-- Step 4a: spawn graders -->
+  <rect x="50" y="340" width="280" height="65" rx="6" fill="#f3e8ee" stroke="#c79bb0"/>
+  <text x="190" y="362" text-anchor="middle" font-size="13" font-weight="700">Step 4a · 为每个 run 派 Grader subagent</text>
+  <text x="190" y="382" text-anchor="middle" font-size="12">把 agents/grader.md 作指令塞进去</text>
+  <text x="190" y="399" text-anchor="middle" font-size="11" fill="#667085">读 transcript + outputs，写 grading.json</text>
+
+  <line x1="330" y1="372" x2="380" y2="372" stroke="#276f86" stroke-width="2.5" marker-end="url(#ar)"/>
+
+  <!-- Step 4b: bash aggregate -->
+  <rect x="385" y="340" width="240" height="65" rx="6" fill="#eef4ef" stroke="#b8cdb4"/>
+  <text x="505" y="362" text-anchor="middle" font-size="13" font-weight="700">Step 4b · Bash 跑聚合脚本</text>
+  <text x="505" y="382" text-anchor="middle" font-size="12">aggregate_benchmark.py</text>
+  <text x="505" y="399" text-anchor="middle" font-size="11" fill="#667085">读所有 grading.json，写 benchmark.json</text>
+
+  <line x1="625" y1="372" x2="675" y2="372" stroke="#276f86" stroke-width="2.5" marker-end="url(#ar)"/>
+
+  <!-- Step 4c: spawn analyzer -->
+  <rect x="680" y="340" width="240" height="65" rx="6" fill="#f3e8ee" stroke="#c79bb0"/>
+  <text x="800" y="362" text-anchor="middle" font-size="13" font-weight="700">Step 4c · 派 Analyzer subagent</text>
+  <text x="800" y="382" text-anchor="middle" font-size="12">benchmark 模式</text>
+  <text x="800" y="399" text-anchor="middle" font-size="11" fill="#667085">找模式：哪条 assertion 永远 pass…</text>
+
+  <!-- 4c → down to Step 5 -->
+  <path d="M800 405 L800 425 L720 425 L720 440" fill="none" stroke="#276f86" stroke-width="2.5" marker-end="url(#ar)"/>
+
+  <!-- Step 5: viewer + user review -->
+  <rect x="280" y="445" width="440" height="32" rx="6" fill="#fff4e6" stroke="#e0bc8d"/>
+  <text x="500" y="466" text-anchor="middle" font-size="13" font-weight="700">Step 5 · 生成 HTML viewer，用户审阅、留 feedback</text>
+
+  <!-- back-loop: Step 5 → Step 1 (iteration-N+1) -->
+  <path d="M280 461 L40 461 L40 240" fill="none" stroke="#8a5a2b" stroke-width="2.5" marker-end="url(#arBack)"/>
+  <text x="50" y="438" font-size="11" fill="#8a5a2b">不满意：改 SKILL.md → iteration-N+1</text>
+
+  <!-- C Description Optimization -->
+  <rect x="20" y="490" width="600" height="200" rx="10" fill="#ffffff" stroke="#a9c5d0"/>
+  <text x="40" y="520" font-size="15" font-weight="700" fill="#276f86">C · Description Optimization（不用 subagent，纯 Python + claude -p）</text>
+  <rect x="50" y="540" width="170" height="65" rx="6" fill="#fff4e6" stroke="#e0bc8d"/>
+  <text x="135" y="565" text-anchor="middle" font-size="12" font-weight="700">生成 20 条 trigger query</text>
+  <text x="135" y="583" text-anchor="middle" font-size="11">10 should-trigger</text>
+  <text x="135" y="598" text-anchor="middle" font-size="11">10 should-not-trigger</text>
+  <line x1="220" y1="572" x2="260" y2="572" stroke="#276f86" stroke-width="2.5" marker-end="url(#ar)"/>
+  <rect x="265" y="540" width="170" height="65" rx="6" fill="#fff4e6" stroke="#e0bc8d"/>
+  <text x="350" y="565" text-anchor="middle" font-size="12" font-weight="700">用户在 HTML 里编辑</text>
+  <text x="350" y="583" text-anchor="middle" font-size="11">下载 eval_set.json</text>
+  <line x1="435" y1="572" x2="475" y2="572" stroke="#276f86" stroke-width="2.5" marker-end="url(#ar)"/>
+  <rect x="480" y="540" width="125" height="65" rx="6" fill="#eef4ef" stroke="#b8cdb4"/>
+  <text x="542" y="565" text-anchor="middle" font-size="12" font-weight="700">run_loop.py</text>
+  <text x="542" y="583" text-anchor="middle" font-size="11">5 轮 train/test</text>
+  <text x="542" y="598" text-anchor="middle" font-size="11">每 query × 3 跑</text>
+
+  <text x="50" y="640" font-size="12" fill="#667085">run_loop 内部：每轮先用 claude -p subprocess 测当前 description 命中率，</text>
+  <text x="50" y="658" font-size="12" fill="#667085">然后再调一次 claude -p 让它根据失败样本写新 description。共 5 轮，选 test 集分数最高那版。</text>
+
+  <!-- D Ship -->
+  <rect x="640" y="490" width="320" height="200" rx="10" fill="#ffffff" stroke="#a9c5d0"/>
+  <text x="660" y="520" font-size="15" font-weight="700" fill="#276f86">D · Ship</text>
+  <rect x="670" y="545" width="130" height="55" rx="6" fill="#eef4ef" stroke="#b8cdb4"/>
+  <text x="735" y="568" text-anchor="middle" font-size="12" font-weight="700">quick_validate.py</text>
+  <text x="735" y="587" text-anchor="middle" font-size="11">查 frontmatter</text>
+  <line x1="800" y1="572" x2="830" y2="572" stroke="#276f86" stroke-width="2.5" marker-end="url(#ar)"/>
+  <rect x="835" y="545" width="115" height="55" rx="6" fill="#eef4ef" stroke="#b8cdb4"/>
+  <text x="892" y="568" text-anchor="middle" font-size="12" font-weight="700">package_skill</text>
+  <text x="892" y="587" text-anchor="middle" font-size="11">打 .skill zip</text>
+  <text x="660" y="635" font-size="12" fill="#667085">最终交付：&lt;skill-name&gt;.skill 文件</text>
+</svg>
+<p class="figure-caption">
+图例：<span style="background:#e8f1f5;padding:1px 8px;border-radius:4px;">浅蓝</span> = 主 agent 自己做，
+<span style="background:#f3e8ee;padding:1px 8px;border-radius:4px;">浅粉</span> = Task subagent，
+<span style="background:#eef4ef;padding:1px 8px;border-radius:4px;">浅绿</span> = Bash 跑 Python 脚本，
+<span style="background:#fff4e6;padding:1px 8px;border-radius:4px;">浅黄</span> = 需要用户参与。
+</p>
+</div>
+</section>
+
+<!-- ============================================================== -->
+<section>
+<h2>3 · 源码目录地图</h2>
+
+<div class="tree">skill-creator/
+├── SKILL.md                  # 主 agent 的剧本（32K），所有流程在这里
+├── agents/                   # 给 subagent 用的 "system prompt"
+│   ├── grader.md             #   → Task subagent 派出去时塞进 prompt
+│   ├── analyzer.md           #   → 同上，含 benchmark 和 post-hoc 两段
+│   ├── comparator.md         #   → 同上，盲评 A/B 用
+│   └── schemas.md            # JSON 数据契约（其实是 references 的内容混进来）
 ├── references/
-│   └── schemas.md                   # evals / grading / benchmark / feedback 的 JSON 契约
-├── agents/
-│   ├── grader.md                    # 读 outputs/transcript，对 assertions 判分
-│   ├── analyzer.md                  # 分析 benchmark 和 transcript，找模式与风险
-│   └── comparator.md                # 盲评两个结果，判断哪个更好
-├── scripts/
-│   ├── aggregate_benchmark.py       # 聚合 pass rate / time / token
-│   ├── run_eval.py                  # 用 claude -p 检测 description 是否触发
-│   ├── improve_description.py       # 根据误触发/漏触发改写 description
-│   ├── run_loop.py                  # train/test split + 多轮 description 优化
-│   ├── quick_validate.py            # 校验 SKILL.md frontmatter
-│   └── package_skill.py             # 打包 .skill，排除开发资产
+│   └── schemas.md            # evals.json / grading.json / benchmark.json 字段定义
+├── scripts/                  # 主 agent 在 Bash 里调用的工具
+│   ├── aggregate_benchmark.py  # 收所有 grading.json，写 benchmark.json/.md
+│   ├── run_eval.py             # C 阶段：测一个 description 在 N 个 query 上的触发率
+│   ├── improve_description.py  # C 阶段：让 LLM 根据失败样本改写 description
+│   ├── run_loop.py             # C 阶段：组合上面两个，做 5 轮 train/test 迭代
+│   ├── quick_validate.py       # D 阶段：检查 SKILL.md frontmatter 合法性
+│   ├── package_skill.py        # D 阶段：打 .skill zip 包
+│   └── generate_report.py      # 生成 description 优化的 HTML 报告
 ├── eval-viewer/
-│   ├── generate_review.py           # 生成 HTML 审阅页面
-│   └── viewer.html                  # 交互式查看输出、指标和反馈
+│   ├── generate_review.py    # B 阶段 Step 5：生成 with-skill vs baseline 的对比 HTML
+│   └── viewer.html
 └── assets/
-    └── eval_review.html             # 让用户审阅 should-trigger eval set</div>
+    └── eval_review.html      # C 阶段 Step 2：让用户审阅 20 条 trigger query 的 HTML</div>
+</section>
 
-      <table>
-        <thead>
-          <tr>
-            <th>文件</th>
-            <th>对应阶段</th>
-            <th>作用</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><code>SKILL.md</code></td>
-            <td>A/B/C/D 横跨</td>
-            <td>定义 skill-creator 的完整协作流程：创建 skill、跑 eval、收集反馈、优化 description、打包发布。</td>
-          </tr>
-          <tr>
-            <td><code>references/schemas.md</code></td>
-            <td>B Evaluate</td>
-            <td>定义 <code>evals.json</code>、<code>grading.json</code>、<code>benchmark.json</code> 等数据结构，保证脚本和 viewer 能对齐。</td>
-          </tr>
-          <tr>
-            <td><code>agents/grader.md</code>、<code>agents/analyzer.md</code>、<code>agents/comparator.md</code></td>
-            <td>B Evaluate</td>
-            <td>提供评分、分析和盲评角色，用来把输出结果转成可讨论的质量信号。</td>
-          </tr>
-          <tr>
-            <td><code>scripts/aggregate_benchmark.py</code></td>
-            <td>B Evaluate</td>
-            <td>把每个 run 的 <code>grading.json</code> 和 <code>timing.json</code> 聚合成 pass rate、耗时、token 的 benchmark。</td>
-          </tr>
-          <tr>
-            <td><code>eval-viewer/generate_review.py</code>、<code>eval-viewer/viewer.html</code></td>
-            <td>B Evaluate</td>
-            <td>生成可交互 HTML，让用户并排看 with-skill 和 baseline 的产物、指标、反馈入口。</td>
-          </tr>
-          <tr>
-            <td><code>assets/eval_review.html</code></td>
-            <td>C Trigger</td>
-            <td>让用户审阅 should-trigger / should-not-trigger 查询集，导出 description eval set。</td>
-          </tr>
-          <tr>
-            <td><code>scripts/run_eval.py</code>、<code>scripts/improve_description.py</code>、<code>scripts/run_loop.py</code></td>
-            <td>C Trigger</td>
-            <td>检测 description 是否触发、根据失败样本改写 description，并用 train/test split 选择最佳版本。</td>
-          </tr>
-          <tr>
-            <td><code>scripts/quick_validate.py</code>、<code>scripts/package_skill.py</code></td>
-            <td>D Ship</td>
-            <td>发布前做结构校验，并把最终 skill 打成 <code>.skill</code> 包。</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
+<!-- ============================================================== -->
+<section>
+<h2>4 · A · Draft 阶段</h2>
 
-  <section>
-    <h2>四、A Draft：把想法变成一个可测试的 skill</h2>
-    <p>
-      Draft 阶段不是直接写一大段提示词，而是先把 skill 的边界问清楚：
-      什么时候触发，输入是什么，输出是什么，是否需要脚本、模板、示例文件，以及怎样才算成功。
-    </p>
+<p>这一段全部由主 agent 直接做，没有 subagent，没有脚本。</p>
 
-    <pre><code>---
-name: invoice-extractor
-description: Use this skill when the user needs to extract structured fields from vendor invoices, normalize currencies, and produce a CSV for accounting review.
----
+<div class="step">
+<span class="who">主 agent</span><strong>访谈用户，捕获意图</strong>
+<p>SKILL.md 给主 agent 列了 4 个必问问题：① 这个 skill 让 Claude 能做什么 ② 应该在什么用户语境/措辞下触发 ③ 输出格式是什么 ④ 要不要配测试用例（客观可验证的任务推荐配，主观风格类的不一定要）。如果对话里已经出现过用户想沉淀的工作流，主 agent 会先从历史里把这些字段抽出来再补问。</p>
+</div>
 
-# Invoice Extractor
+<div class="step">
+<span class="who">主 agent</span><strong>写 SKILL.md draft</strong>
+<p><code>name</code>（kebab-case，≤64 字符）、<code>description</code>（≤1024 字符；SKILL.md 明确说当前 Claude 倾向于<em>欠触发</em>，让主 agent 把描述写得稍微"pushy"一点）、SKILL.md body（≤500 行；超了就拆 references/）。</p>
+</div>
 
-Use this workflow when the user gives invoice PDFs, screenshots, or spreadsheets and asks for structured accounting data.
-
-1. Inspect every input file.
-2. Extract vendor, invoice number, date, amount, tax, currency, and missing fields.
-3. Produce a CSV and a short review note.
-4. Use bundled scripts when available instead of hand-rolling parsing logic.</code></pre>
-
-    <div class="diagram">
-      <div class="diagram-title">图 2：Skill 的三层加载</div>
-      <svg viewBox="0 0 760 250" role="img" aria-label="three level skill loading">
-        <defs>
-          <marker id="arrowLoad" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-            <path d="M0,0 L0,6 L9,3 z" fill="#276f86"></path>
-          </marker>
-        </defs>
-        <rect x="35" y="70" width="180" height="90" rx="8" fill="#e8f1f5" stroke="#a9c5d0"></rect>
-        <text x="125" y="102" text-anchor="middle" font-size="15" font-weight="700">frontmatter</text>
-        <text x="125" y="128" text-anchor="middle" font-size="13">name + description</text>
-        <text x="125" y="150" text-anchor="middle" font-size="12">决定是否触发</text>
-        <line x1="215" y1="115" x2="290" y2="115" stroke="#276f86" stroke-width="3" marker-end="url(#arrowLoad)"></line>
-        <rect x="300" y="70" width="180" height="90" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
-        <text x="390" y="102" text-anchor="middle" font-size="15" font-weight="700">SKILL.md body</text>
-        <text x="390" y="128" text-anchor="middle" font-size="13">触发后读取</text>
-        <text x="390" y="150" text-anchor="middle" font-size="12">流程、规则、边界</text>
-        <line x1="480" y1="115" x2="555" y2="115" stroke="#276f86" stroke-width="3" marker-end="url(#arrowLoad)"></line>
-        <rect x="565" y="70" width="160" height="90" rx="8" fill="#eef4ef" stroke="#b8cdb4"></rect>
-        <text x="645" y="102" text-anchor="middle" font-size="15" font-weight="700">resources</text>
-        <text x="645" y="128" text-anchor="middle" font-size="13">scripts / examples</text>
-        <text x="645" y="150" text-anchor="middle" font-size="12">按需读取或执行</text>
-      </svg>
-      <p class="figure-caption">
-        第一层只有 <code>name</code> 和 <code>description</code>，它决定是否打开 skill。第二层是主说明，第三层是脚本、模板和示例。
-      </p>
-    </div>
-  </section>
-
-  <section>
-    <h2>五、B Evaluate：先证明 skill 真的有用</h2>
-    <p>
-      这个阶段的核心问题不是“skill 看起来是不是专业”，而是“同样的任务，用 skill 是否真的更好”。
-      因此每个测试用例都要跑两遍：一遍带 skill，一遍作为 baseline。
-    </p>
-
-    <h3>eval set 是怎么生成的</h3>
-    <p>
-      eval set 不是凭空写出来的。<code>SKILL.md</code> 要求写完 skill draft 后，先提出 2-3 个真实测试 prompt 给用户确认。
-      用户确认后保存到 <code>evals/evals.json</code>。初始文件主要包含 <code>prompt</code>、<code>expected_output</code> 和输入文件路径，
-      assertions 可以在 run 进行时补充。
-    </p>
-
-    <div class="diagram">
-      <div class="diagram-title">图 3：eval set 的生成过程</div>
-      <svg viewBox="0 0 760 300" role="img" aria-label="eval set generation">
-        <defs>
-          <marker id="arrowEval" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-            <path d="M0,0 L0,6 L9,3 z" fill="#276f86"></path>
-          </marker>
-        </defs>
-        <rect x="35" y="95" width="145" height="75" rx="8" fill="#e8f1f5" stroke="#a9c5d0"></rect>
-        <text x="107" y="125" text-anchor="middle" font-size="14" font-weight="700">真实用户意图</text>
-        <text x="107" y="148" text-anchor="middle" font-size="12">任务 + 文件 + 成功标准</text>
-        <line x1="180" y1="132" x2="235" y2="132" stroke="#276f86" stroke-width="3" marker-end="url(#arrowEval)"></line>
-        <rect x="245" y="80" width="160" height="105" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
-        <text x="325" y="112" text-anchor="middle" font-size="14" font-weight="700">候选测试 prompt</text>
-        <text x="325" y="137" text-anchor="middle" font-size="12">Claude 生成 2-3 个</text>
-        <text x="325" y="160" text-anchor="middle" font-size="12">用户确认或修改</text>
-        <line x1="405" y1="132" x2="460" y2="132" stroke="#276f86" stroke-width="3" marker-end="url(#arrowEval)"></line>
-        <rect x="470" y="80" width="160" height="105" rx="8" fill="#eef4ef" stroke="#b8cdb4"></rect>
-        <text x="550" y="112" text-anchor="middle" font-size="14" font-weight="700">evals/evals.json</text>
-        <text x="550" y="137" text-anchor="middle" font-size="12">prompt + expected_output</text>
-        <text x="550" y="160" text-anchor="middle" font-size="12">files + assertions</text>
-      </svg>
-      <p class="figure-caption">
-        eval set 的来源是用户真实任务，而不是抽象题目。后续所有 with-skill/baseline 都围绕这批任务展开。
-      </p>
-    </div>
-
-    <pre><code>{
+<div class="step">
+<span class="who">主 agent</span><strong>提 2-3 个测试 prompt 并让用户确认</strong>
+<p>不写 assertions，先把 prompt 和期望输出存进 <code>evals/evals.json</code>。assertions 推迟到 B 阶段 Step 2 等 executor 在跑的时候再起草——这样主 agent 不会卡在等 IO 上。</p>
+<pre><code>{
   "evals": [
-    {
-      "id": 1,
-      "name": "vendor-tax-csv",
-      "prompt": "读取 Downloads/invoices 里的三张供应商发票 PDF，输出 vendor、invoice_no、date、amount、tax、currency 六列 CSV。",
-      "expected_output": "生成可被财务复核的 CSV，并标出缺失字段。",
-      "files": ["evals/files/vendor-a.pdf", "evals/files/vendor-b.pdf", "evals/files/vendor-c.pdf"],
-      "expectations": []
-    }
+    {"id": 1, "prompt": "...", "expected_output": "...", "files": []}
   ]
 }</code></pre>
+</div>
+</section>
 
-    <h3>一次 eval 为什么要跑两条线</h3>
-    <div class="diagram">
-      <div class="diagram-title">图 4：一次 eval 为什么要跑两条线</div>
-      <svg viewBox="0 0 760 350" role="img" aria-label="with skill versus baseline">
-        <defs>
-          <marker id="arrowTwo" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-            <path d="M0,0 L0,6 L9,3 z" fill="#276f86"></path>
-          </marker>
-        </defs>
-        <rect x="35" y="135" width="150" height="80" rx="8" fill="#e8f1f5" stroke="#a9c5d0"></rect>
-        <text x="110" y="166" text-anchor="middle" font-size="14" font-weight="700">同一个 eval prompt</text>
-        <text x="110" y="190" text-anchor="middle" font-size="12">同一批输入文件</text>
-        <line x1="185" y1="165" x2="270" y2="100" stroke="#276f86" stroke-width="3" marker-end="url(#arrowTwo)"></line>
-        <line x1="185" y1="190" x2="270" y2="250" stroke="#276f86" stroke-width="3" marker-end="url(#arrowTwo)"></line>
-        <rect x="280" y="60" width="175" height="90" rx="8" fill="#eef4ef" stroke="#b8cdb4"></rect>
-        <text x="367" y="92" text-anchor="middle" font-size="15" font-weight="700">with_skill run</text>
-        <text x="367" y="118" text-anchor="middle" font-size="12">读取当前 SKILL.md</text>
-        <rect x="280" y="220" width="175" height="90" rx="8" fill="#fff4e6" stroke="#e0bc8d"></rect>
-        <text x="367" y="252" text-anchor="middle" font-size="15" font-weight="700">baseline run</text>
-        <text x="367" y="278" text-anchor="middle" font-size="12">不用 skill / 旧 skill</text>
-        <line x1="455" y1="105" x2="535" y2="105" stroke="#276f86" stroke-width="3" marker-end="url(#arrowTwo)"></line>
-        <line x1="455" y1="265" x2="535" y2="265" stroke="#276f86" stroke-width="3" marker-end="url(#arrowTwo)"></line>
-        <rect x="545" y="60" width="170" height="90" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
-        <text x="630" y="92" text-anchor="middle" font-size="14" font-weight="700">with_skill/outputs</text>
-        <text x="630" y="118" text-anchor="middle" font-size="12">outputs + transcript + timing</text>
-        <rect x="545" y="220" width="170" height="90" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
-        <text x="630" y="252" text-anchor="middle" font-size="14" font-weight="700">baseline/outputs</text>
-        <text x="630" y="278" text-anchor="middle" font-size="12">outputs + transcript + timing</text>
-      </svg>
-      <p class="figure-caption">
-        这是控制变量实验：prompt 和输入文件相同，变量只有一个，即是否让 Claude 使用当前 skill。
-      </p>
-    </div>
+<!-- ============================================================== -->
+<section>
+<h2>5 · B · Evaluate 阶段（核心）</h2>
 
-    <div class="callout">
-      <strong>两套启动方式不要混淆。</strong>
-      <p>
-        能力质量评测不是通过命令行重新跑 <code>claude -p</code>，而是由正在使用
-        <code>skill-creator</code> 的主控 agent 直接启动 subagent：一个 subagent 走
-        <code>with_skill</code>，另一个 subagent 走 baseline。
-        这个设计有一个重要边界：被测 run 已经运行在 subagent 里，因此如果某个 skill 的核心能力依赖“再开 subagent”来完成，
-        这条评测路径不能真实复现嵌套调度。
-      </p>
-      <table>
-        <thead>
-          <tr>
-            <th>评测对象</th>
-            <th>启动方式</th>
-            <th>真正测什么</th>
-            <th>天然不擅长什么</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>能力质量 eval</td>
-            <td>主控 agent 启动 with-skill / baseline subagents</td>
-            <td>同一任务下，当前 skill 是否让最终产物更好、更稳定，成本是否可接受。</td>
-            <td>依赖再次启动 subagent 的 skill。被测 run 已经是 subagent，不能再开子 subagent，因此无法真实评估 orchestrator 型 skill 的调度质量。</td>
-          </tr>
-          <tr>
-            <td>description 触发 eval</td>
-            <td><code>scripts/run_eval.py</code> 调用命令行 <code>claude -p</code></td>
-            <td>某条用户 query 是否会触发这个 skill，是否误触发或漏触发。</td>
-            <td>skill 触发以后做得好不好，以及多轮对话过程质量。</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+<p>SKILL.md 把这一段标为 "one continuous sequence — don't stop partway through"。
+主 agent 会沿着 Step 1 → 5 一路推到 viewer 打开为止。每一步都会落盘到
+<code>&lt;skill-name&gt;-workspace/iteration-N/eval-X/</code> 这个目录结构里。</p>
 
-    <h3>评估目录是后续工具的协议</h3>
-    <pre><code>invoice-extractor-workspace/                  # 这个 skill 的评估工作区
-└── iteration-1/                              # 一轮实验批次
-    ├── eval-vendor-tax-csv/                 # 一个具体测试用例
-    │   ├── eval_metadata.json               # eval id、名称、prompt、assertions
-    │   ├── with_skill/                      # 实验组：使用当前 skill
-    │   │   ├── outputs/                     # 最终产物，如 invoice.csv
-    │   │   ├── transcript.md                # 执行过程，grader 会读
-    │   │   ├── timing.json                  # token 和耗时
-    │   │   └── grading.json                 # grader 对 assertions 的判分
-    │   └── without_skill/                   # 对照组：不用 skill 或旧 skill
-    │       ├── outputs/
-    │       ├── transcript.md
-    │       ├── timing.json
-    │       └── grading.json
-    ├── benchmark.json                       # 机器可读聚合指标
-    └── benchmark.md                         # 人类可读聚合报告</code></pre>
+<h3>Step 1 · 同一个 turn 内并行派出 2N 个 Executor subagent</h3>
 
-    <div class="artifact-grid">
-      <div class="artifact"><b>eval_metadata.json</b> 这个 eval 是什么：id、名称、prompt、assertions。</div>
-      <div class="artifact"><b>outputs/</b> 真正给用户看的产物，也是 viewer 的核心内容。</div>
-      <div class="artifact"><b>transcript.md</b> 执行过程证据。grader 不能只相信执行者声称完成了。</div>
-      <div class="artifact"><b>timing.json</b> subagent 完成通知里的 token 和耗时，只出现一次，所以要及时保存。</div>
-    </div>
-  </section>
+<div class="step">
+<span class="who sub">Subagent · Executor × 2N</span>
+<p><strong>为什么必须同 turn 派出：</strong>SKILL.md 强调"don't spawn the with-skill runs first and then come back for baselines later"。原因是同 turn 派出去的 Task 才会真正并行，否则 wall clock 会被串行化拉爆。</p>
+<p><strong>派的方式：</strong>主 agent 在一个回复里连续调用 Task 工具 2N 次。每次的 prompt 是一段固定模板：</p>
+<pre><code>Execute this task:
+- Skill path: &lt;path-to-skill&gt;   ← baseline 这行删掉就是 baseline
+- Task: &lt;eval prompt&gt;
+- Input files: &lt;eval files&gt;
+- Save outputs to: &lt;workspace&gt;/iteration-N/eval-X/with_skill/outputs/
+- Outputs to save: &lt;用户关心的产物，如 "the .docx file"&gt;</code></pre>
+<p><strong>baseline 是什么：</strong>新建 skill 时 baseline = 不带 skill 跑同样的 prompt；改进现有 skill 时，主 agent 先 <code>cp -r</code> 把旧版 skill 快照到 <code>skill-snapshot/</code>，baseline subagent 指向那个快照。</p>
+<p><strong>executor 干什么：</strong>就是一个普通 Claude Code subagent，按 prompt 完成任务，把产物写到指定目录，把执行过程作为 transcript 留下。它不知道自己是"with skill"还是"baseline"。</p>
+</div>
 
-  <section>
-    <h2>六、B Evaluate：grader、benchmark、viewer 三层判断</h2>
-    <p>
-      skill-creator 不把“模型说自己完成了”当成成功。它把评估拆成三层：
-      grader 看断言，benchmark 看整体指标，viewer 让人类看最终产物。
-    </p>
+<h3>Step 2 · 等待期间，主 agent 起草 assertions</h3>
 
-    <div class="diagram">
-      <div class="diagram-title">图 5：从产物到决策的三层判断</div>
-      <svg viewBox="0 0 760 360" role="img" aria-label="grader benchmark viewer">
-        <defs>
-          <marker id="arrowJudge" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-            <path d="M0,0 L0,6 L9,3 z" fill="#276f86"></path>
-          </marker>
-        </defs>
-        <rect x="35" y="120" width="150" height="90" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
-        <text x="110" y="154" text-anchor="middle" font-size="14" font-weight="700">outputs + transcript</text>
-        <text x="110" y="180" text-anchor="middle" font-size="12">文件与过程证据</text>
-        <line x1="185" y1="165" x2="250" y2="165" stroke="#276f86" stroke-width="3" marker-end="url(#arrowJudge)"></line>
-        <rect x="260" y="90" width="145" height="150" rx="8" fill="#e8f1f5" stroke="#a9c5d0"></rect>
-        <text x="332" y="125" text-anchor="middle" font-size="15" font-weight="700">Grader</text>
-        <text x="332" y="153" text-anchor="middle" font-size="12">assertions 是否通过</text>
-        <text x="332" y="176" text-anchor="middle" font-size="12">证据来自文件/转录</text>
-        <text x="332" y="199" text-anchor="middle" font-size="12">也会指出 eval 太弱</text>
-        <line x1="405" y1="165" x2="470" y2="165" stroke="#276f86" stroke-width="3" marker-end="url(#arrowJudge)"></line>
-        <rect x="480" y="90" width="125" height="150" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
-        <text x="542" y="125" text-anchor="middle" font-size="15" font-weight="700">Benchmark</text>
-        <text x="542" y="153" text-anchor="middle" font-size="12">pass rate</text>
-        <text x="542" y="176" text-anchor="middle" font-size="12">time</text>
-        <text x="542" y="199" text-anchor="middle" font-size="12">token</text>
-        <line x1="605" y1="165" x2="660" y2="165" stroke="#276f86" stroke-width="3" marker-end="url(#arrowJudge)"></line>
-        <rect x="670" y="90" width="70" height="150" rx="8" fill="#fff4e6" stroke="#e0bc8d"></rect>
-        <text x="705" y="125" text-anchor="middle" font-size="15" font-weight="700">Viewer</text>
-        <text x="705" y="153" text-anchor="middle" font-size="12">人工看</text>
-        <text x="705" y="176" text-anchor="middle" font-size="12">给反馈</text>
-      </svg>
-      <p class="figure-caption">
-        这三层回答不同问题：grader 问“断言过了吗”，benchmark 问“整体是否比 baseline 好”，viewer 问“人真的满意吗”。
-      </p>
-    </div>
+<div class="step">
+<span class="who">主 agent</span>
+<p>2N 个 subagent 都在后台跑（可能几十秒到几分钟），主 agent 不空等。它给每个 eval case 起草一组<strong>客观可验证</strong>的判分项（如"输出 CSV 有 6 列"、"文件名是 invoices.csv"、"包含 vendor 字段"），写回 <code>eval_metadata.json</code> 的 <code>assertions</code> 数组。SKILL.md 提醒：主观质量项不要硬塞 assertion，留给人审。</p>
+</div>
 
-    <pre><code>{
-  "expectations": [
-    {
-      "text": "CSV 包含 vendor、invoice_no、date、amount、tax、currency 六列",
-      "passed": true,
-      "evidence": "outputs/invoice.csv header contains all required columns"
-    },
-    {
-      "text": "缺失税号的发票必须标记 missing_tax_id",
-      "passed": false,
-      "evidence": "vendor-b row leaves the field blank without an explicit missing marker"
-    }
-  ],
-  "summary": "Most extraction fields are correct, but missing-field handling is inconsistent."
-}</code></pre>
+<h3>Step 3 · 接收 timing notification 并立即落盘</h3>
 
-    <p>
-      benchmark 不是为了证明 with-skill 永远更好，而是为了量化取舍。一个 skill 可能用更多 token 和时间，
-      但换来更高通过率；也可能输出更漂亮，但断言没有提升。这些差异需要和用户一起判断。
-    </p>
+<div class="step">
+<span class="who">主 agent</span>
+<p>每个 Task subagent 完成时，Claude Code 会给主 agent 一条 notification，里面带 <code>total_tokens</code> 和 <code>duration_ms</code>——<strong>这是唯一能拿到这两个数的地方</strong>。主 agent 必须在收到通知的当下就把它写进对应 run 目录的 <code>timing.json</code>，否则数据就丢了。</p>
+</div>
 
-    <div class="diagram">
-      <div class="diagram-title">图 6：viewer 不是展示页，而是下一轮输入采集器</div>
-      <svg viewBox="0 0 760 260" role="img" aria-label="viewer feedback loop">
-        <defs>
-          <marker id="arrowView" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-            <path d="M0,0 L0,6 L9,3 z" fill="#276f86"></path>
-          </marker>
-        </defs>
-        <rect x="40" y="80" width="150" height="90" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
-        <text x="115" y="113" text-anchor="middle" font-size="14" font-weight="700">review HTML</text>
-        <text x="115" y="138" text-anchor="middle" font-size="12">输出 + 指标 + 对照</text>
-        <line x1="190" y1="125" x2="270" y2="125" stroke="#276f86" stroke-width="3" marker-end="url(#arrowView)"></line>
-        <rect x="280" y="80" width="150" height="90" rx="8" fill="#fff4e6" stroke="#e0bc8d"></rect>
-        <text x="355" y="113" text-anchor="middle" font-size="14" font-weight="700">human feedback</text>
-        <text x="355" y="138" text-anchor="middle" font-size="12">哪里不满意</text>
-        <line x1="430" y1="125" x2="510" y2="125" stroke="#276f86" stroke-width="3" marker-end="url(#arrowView)"></line>
-        <rect x="520" y="80" width="170" height="90" rx="8" fill="#eef4ef" stroke="#b8cdb4"></rect>
-        <text x="605" y="113" text-anchor="middle" font-size="14" font-weight="700">下一轮修改</text>
-        <text x="605" y="138" text-anchor="middle" font-size="12">SKILL.md / scripts / examples</text>
-      </svg>
-    </div>
-  </section>
+<h3>Step 4 · Grade → Aggregate → Analyze</h3>
 
-  <section>
-    <h2>七、C Trigger：description 优化器测的是路由</h2>
-    <p>
-      前两节测的是“skill 被使用以后做得好不好”。第七节测的是另一个问题：
-      这个 skill 到底该不该被唤起。这里的核心对象是 frontmatter 里的 <code>description</code>。
-    </p>
+<h4>4a. 对每个 run 派一个 Grader subagent</h4>
+<div class="step">
+<span class="who sub">Subagent · Grader × 2N</span>
+<p><strong>什么时候触发：</strong>所有 executor 跑完后，主 agent 为每个 run 目录派一个 Task。也可以 inline 自己打分（小 skill 常用），但 SKILL.md 默认推荐 subagent 模式。</p>
+<p><strong>主 agent 怎么调用：</strong>读完 <code>agents/grader.md</code>，把里面的 8 步流程（"读 transcript → 检查 output 文件 → 对每条 assertion 找证据 → 提取并验证隐式断言 → 读 user_notes.md → 评 eval 本身 → 写 grading.json"）作为 prompt 派给 subagent，附上 <code>expectations</code>、<code>transcript_path</code>、<code>outputs_dir</code> 三个参数。</p>
+<p><strong>grader 干什么：</strong>对每条 assertion 给出 <code>{text, passed, evidence}</code> 三元组——viewer 强依赖这三个字段名，写错就显示不出来。它还会做两件不显眼但关键的事：</p>
+<ul>
+  <li><strong>extract claims</strong>：从 transcript 里抠出隐式断言（"我用了 pypdf 填表"）并验证，抓 executor 自己声称做了但实际没做的情况</li>
+  <li><strong>critique the evals</strong>：如果某条 assertion "文件名对就算 pass" 但内容明显错了，grader 会在 <code>eval_feedback</code> 字段里报告——这条 assertion 太弱</li>
+</ul>
+</div>
 
-    <div class="diagram">
-      <div class="diagram-title">图 7：description 是 skill 的路由规则</div>
-      <svg viewBox="0 0 760 300" role="img" aria-label="description routing">
-        <defs>
-          <marker id="arrowRoute" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-            <path d="M0,0 L0,6 L9,3 z" fill="#276f86"></path>
-          </marker>
-        </defs>
-        <rect x="40" y="110" width="150" height="75" rx="8" fill="#e8f1f5" stroke="#a9c5d0"></rect>
-        <text x="115" y="140" text-anchor="middle" font-size="14" font-weight="700">用户 query</text>
-        <text x="115" y="162" text-anchor="middle" font-size="12">真实表达 / 模糊说法</text>
-        <line x1="190" y1="147" x2="270" y2="147" stroke="#276f86" stroke-width="3" marker-end="url(#arrowRoute)"></line>
-        <rect x="280" y="90" width="170" height="115" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
-        <text x="365" y="123" text-anchor="middle" font-size="14" font-weight="700">available skills</text>
-        <text x="365" y="150" text-anchor="middle" font-size="12">name + description</text>
-        <text x="365" y="173" text-anchor="middle" font-size="12">模型判断是否打开</text>
-        <line x1="450" y1="125" x2="545" y2="95" stroke="#276f86" stroke-width="3" marker-end="url(#arrowRoute)"></line>
-        <line x1="450" y1="170" x2="545" y2="205" stroke="#276f86" stroke-width="3" marker-end="url(#arrowRoute)"></line>
-        <rect x="555" y="55" width="150" height="75" rx="8" fill="#eef4ef" stroke="#b8cdb4"></rect>
-        <text x="630" y="98" text-anchor="middle" font-size="15" font-weight="700">触发</text>
-        <rect x="555" y="175" width="150" height="75" rx="8" fill="#fff4e6" stroke="#e0bc8d"></rect>
-        <text x="630" y="218" text-anchor="middle" font-size="15" font-weight="700">不触发</text>
-      </svg>
-      <p class="figure-caption">
-        description 不是给人看的简介，而是模型决定“要不要打开这个 skill”的路由信号。
-      </p>
-    </div>
+<h4>4b. Bash 跑聚合脚本</h4>
+<div class="step">
+<span class="who bash">Bash · aggregate_benchmark.py</span>
+<p>主 agent 跑：</p>
+<pre><code>python -m scripts.aggregate_benchmark &lt;workspace&gt;/iteration-N --skill-name &lt;name&gt;</code></pre>
+<p>脚本扫所有 <code>eval-*/{with_skill,without_skill}/run-*/grading.json</code>，按 configuration 分组算 mean / stddev / min / max（pass_rate / time_seconds / tokens 三个指标），输出 <code>benchmark.json</code> + <code>benchmark.md</code>。delta = 第一个 configuration 减第二个，例如 <code>+0.50 pass_rate, +13.2s, +8400 tokens</code>。</p>
+</div>
 
-    <h3>触发 eval 的样本长什么样</h3>
-    <p>
-      description eval query 要像真实用户会输入的话，包括上下文、文件名、业务目的、模糊表达、错别字和近似但不该触发的负样本。
-      负样本不能太容易，否则只能证明 description 没有离谱，不能证明边界写得好。
-    </p>
+<h4>4c. 派 Analyzer subagent 做模式分析</h4>
+<div class="step">
+<span class="who sub">Subagent · Analyzer（benchmark 模式）</span>
+<p><strong>什么时候触发：</strong>benchmark.json 写完之后。主 agent 把 <code>agents/analyzer.md</code> 里 "Analyzing Benchmark Results" 那一节作为 prompt 派出去。</p>
+<p><strong>analyzer 干什么：</strong>它<strong>不提改进建议</strong>（那是 improvement 步骤的事），只在数据里捞模式：哪条 assertion 在 with/without 都满分（不区分能力）、哪条 eval 方差大（可能 flaky）、哪条 without_skill 永远失败但 with_skill 永远成功（强信号），token / time 是否被 skill 拉高了。输出是 JSON 数组的自由文本 note，会被插回 benchmark.json 的 <code>notes</code> 字段。</p>
+</div>
 
-    <pre><code>[
-  {
-    "query": "我老板刚发了一个 Q4 sales final FINAL v2.xlsx，让我加一列 profit margin，收入在 C 列，成本在 D 列",
-    "should_trigger": true
-  },
-  {
-    "query": "帮我解释一下 profit margin 是什么意思",
-    "should_trigger": false
-  },
-  {
-    "query": "我有几张 PDF 发票，想快速看一下总金额",
-    "should_trigger": false
-  }
-]</code></pre>
+<h3>Step 5 · 启动 viewer，把球踢给用户</h3>
 
-    <h3>run_eval.py 如何判断“触发了”</h3>
-    <p>
-      <code>scripts/run_eval.py</code> 的做法不是让模型自我报告“我会不会触发”，而是跑一次真实的
-      <code>claude -p</code>。注意这和第五节的能力质量 eval 是两条路径；这里不启动 with-skill/baseline subagents，
-      也不评最终产物，只观察路由是否命中。
-    </p>
+<div class="step">
+<span class="who bash">Bash · eval-viewer/generate_review.py</span>
+<p>主 agent 在后台启 HTML viewer：</p>
+<pre><code>nohup python &lt;skill-creator&gt;/eval-viewer/generate_review.py \
+  &lt;workspace&gt;/iteration-N \
+  --skill-name "my-skill" \
+  --benchmark &lt;workspace&gt;/iteration-N/benchmark.json \
+  &gt; /dev/null 2&gt;&amp;1 &amp;</code></pre>
+<p>viewer 有两个 tab：<strong>Outputs</strong>（按 eval 翻页看 with-skill / baseline 产物 + 反馈框）和 <strong>Benchmark</strong>（pass rate / 时延 / token 的表格 + analyzer notes）。用户点 "Submit All Reviews"，所有反馈进 <code>feedback.json</code>。</p>
+</div>
 
-    <div class="diagram">
-      <div class="diagram-title">图 8：run_eval.py 的触发检测机制</div>
-      <svg viewBox="0 0 760 300" role="img" aria-label="run eval trigger detection">
-        <defs>
-          <marker id="arrowRun" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-            <path d="M0,0 L0,6 L9,3 z" fill="#276f86"></path>
-          </marker>
-        </defs>
-        <rect x="35" y="105" width="140" height="80" rx="8" fill="#e8f1f5" stroke="#a9c5d0"></rect>
-        <text x="105" y="137" text-anchor="middle" font-size="14" font-weight="700">待测 description</text>
-        <text x="105" y="160" text-anchor="middle" font-size="12">每轮可能不同</text>
-        <line x1="175" y1="145" x2="235" y2="145" stroke="#276f86" stroke-width="3" marker-end="url(#arrowRun)"></line>
-        <rect x="245" y="90" width="150" height="110" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
-        <text x="320" y="123" text-anchor="middle" font-size="14" font-weight="700">临时 command</text>
-        <text x="320" y="149" text-anchor="middle" font-size="12">.claude/commands</text>
-        <text x="320" y="172" text-anchor="middle" font-size="12">name 带随机 id</text>
-        <line x1="395" y1="145" x2="455" y2="145" stroke="#276f86" stroke-width="3" marker-end="url(#arrowRun)"></line>
-        <rect x="465" y="90" width="110" height="110" rx="8" fill="#fff4e6" stroke="#e0bc8d"></rect>
-        <text x="520" y="123" text-anchor="middle" font-size="14" font-weight="700">claude -p</text>
-        <text x="520" y="149" text-anchor="middle" font-size="12">stream-json</text>
-        <text x="520" y="172" text-anchor="middle" font-size="12">多次重复</text>
-        <line x1="575" y1="145" x2="635" y2="145" stroke="#276f86" stroke-width="3" marker-end="url(#arrowRun)"></line>
-        <rect x="645" y="90" width="90" height="110" rx="8" fill="#eef4ef" stroke="#b8cdb4"></rect>
-        <text x="690" y="123" text-anchor="middle" font-size="14" font-weight="700">检测事件</text>
-        <text x="690" y="149" text-anchor="middle" font-size="12">Skill / Read</text>
-        <text x="690" y="172" text-anchor="middle" font-size="12">命中 id</text>
-      </svg>
-    </div>
+<div class="step">
+<span class="who user">用户</span>
+<p>用户翻 viewer，在每个 eval 的反馈框里写自由文本（"图表缺坐标轴标签" / "完美" / 留空表示 ok），最后提交。Cowork 等无显示环境用 <code>--static</code> 出 HTML 文件让用户自己下载打开。</p>
+</div>
 
-    <h3>run_loop.py 如何避免 description 背题</h3>
-    <p>
-      如果只拿同一批 eval 不断优化，description 会越来越像那 20 条样本的关键词集合。
-      <code>run_loop.py</code> 会把 eval set 分成 train 和 held-out test：优化模型只根据 train 失败样本改写；
-      最终采用哪版 description，则看 test 分数。
-    </p>
-  </section>
+<h3>Step 6 · 读 feedback，改 SKILL.md，进 iteration-N+1</h3>
 
-  <section>
-    <h2>八、D Ship：校验和打包成 .skill 文件</h2>
-    <p>
-      发布前会跑 <code>quick_validate.py</code>，检查 <code>SKILL.md</code> frontmatter 是否合规：
-      必须有 <code>name</code> 和 <code>description</code>，name 要是 kebab-case，description 不能包含尖括号且长度受限。
-    </p>
-    <p>
-      <code>package_skill.py</code> 会把最终 skill 打成 <code>.skill</code> 包，同时排除开发资产，例如
-      <code>evals/</code>、缓存文件和临时文件。这个选择很合理：eval 是开发过程资产，不一定要随最终能力包分发。
-    </p>
-  </section>
+<div class="step">
+<span class="who">主 agent</span>
+<p>主 agent 读 <code>feedback.json</code>，结合 benchmark + analyzer notes 想"该怎么改 SKILL.md"。SKILL.md 这一段写得很务实：不要 overfit 到这几个 case；保持 prompt 精简，砍掉没在产出价值的句子；少写 ALWAYS / NEVER，多写 why；如果几个 case 都让 executor 临时写了同一种 helper script，那是个把它打包进 <code>scripts/</code> 的信号。</p>
+<p>改完后把整个 B 阶段（Step 1 → 5）重跑一遍到 <code>iteration-N+1/</code>。<code>generate_review.py</code> 这次带 <code>--previous-workspace</code>，viewer 会把上一轮的 output 和 feedback 折叠显示作为对比。</p>
+</div>
 
-  <section>
-    <h2>九、这个方案的局限性</h2>
-    <p>
-      Anthropic 这套方案强在把 skill 变成可评估的工程对象，但它不是万能测试框架。它默认最适合“单次任务执行型 skill”：
-      用户给一个 prompt，模型完成任务，产出文件或文本，然后 grader 和 viewer 评估结果。
-    </p>
+<h3>可选：Advanced 盲评流程</h3>
 
-    <div class="warning callout">
-      <strong>局限 1：它不是多轮对话 harness。</strong>
-      <p>
-        对 SDD、需求澄清、访谈型 skill 来说，核心质量在多轮追问策略：是否先澄清、问什么、何时停止、如何根据用户回答更新需求状态。
-        当前 eval schema 主要是一个 <code>prompt</code> 加可选文件，不原生模拟“用户回答第二轮、第三轮”的过程。
-      </p>
-    </div>
+<div class="step">
+<span class="who sub">Subagent · Comparator + Analyzer（post-hoc 模式）</span>
+<p>当用户问"新版到底比旧版好吗"时，可以走这条更严谨的路：主 agent 先派一个 <strong>Comparator</strong> subagent，给它两份 output 标签 A / B（不告诉哪个是新版），让它生成 rubric 打分选赢家；再派一个 <strong>Analyzer</strong>（post-hoc 模式，读 <code>analyzer.md</code> 前半段），unblind 后分析"赢的那版到底赢在哪、输的那版改什么才能反超"，输出带优先级的 <code>improvement_suggestions</code>。</p>
+<p>注意 analyzer.md 这一个文件里其实塞了两套指令：前半段是 post-hoc"为什么赢"，后半段（从 "Analyzing Benchmark Results" 起）是 "在 benchmark 里找模式"。主 agent 根据当前场景只把对应那一段贴进 prompt。</p>
+</div>
+</section>
 
-    <div class="warning callout">
-      <strong>局限 2：它不能真实评估嵌套 subagent 调度。</strong>
-      <p>
-        能力质量 eval 本身通过 subagent 执行 with-skill/baseline。由于 subagent 不能再开 subagent，
-        如果被测 skill 的核心是 orchestrator，例如需求澄清后分派多个专家 agent、项目管理 agent、TDD worker，
-        默认 creator eval 只能评最终近似结果，不能真实复现内部调度。
-      </p>
-    </div>
+<!-- ============================================================== -->
+<section>
+<h2>6 · C · Description Optimization 阶段</h2>
 
-    <p>
-      因此更准确的结论是：<code>skill-creator</code> 能很好评估“用了 skill 后结果是否更好”，
-      但不擅长评估“skill 内部的交互策略或 agent 调度策略是否更好”。
-    </p>
-  </section>
+<div class="note warn">
+<strong>关键区别：</strong> 这一段<strong>不派 Task subagent</strong>，完全靠 Python 脚本 + <code>claude -p</code> subprocess。
+因为要测的是"description 写成这样会不会让<em>另一个全新的 Claude Code 会话</em>把这个 skill 加载起来"——
+只有 <code>claude -p</code>（一个独立的、不知道当前会话上下文的 Claude Code 进程）才能模拟"陌生 Claude 看到 skill 列表"的状态。
+</div>
 
-  <section>
-    <h2>十、它体现的几个工程原则</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>原则</th>
-          <th>在 skill-creator 里的体现</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>把触发当路由问题</td>
-          <td><code>description</code> 是 primary trigger mechanism，所以有独立的 should-trigger / should-not-trigger eval、近似负样本和 train/test holdout。</td>
-        </tr>
-        <tr>
-          <td>用 baseline 控制自嗨</td>
-          <td>同一 prompt 跑 with-skill 和 baseline，避免只看“用了 skill 后看起来不错”。</td>
-        </tr>
-        <tr>
-          <td>用人工反馈弥补指标盲区</td>
-          <td>viewer 让用户直接看最终产物，并把反馈写回下一轮优化。</td>
-        </tr>
-        <tr>
-          <td>把重复劳动沉淀成资源</td>
-          <td>如果 eval transcript 中反复出现同类 helper script，说明应该沉淀到 skill 的 <code>scripts/</code>。</td>
-        </tr>
-        <tr>
-          <td>防止过拟合 eval</td>
-          <td>改进 skill 时要求从反馈中泛化；description 优化也用 held-out test 选择最佳版本。</td>
-        </tr>
-      </tbody>
-    </table>
-  </section>
+<h3>Step 1 · 主 agent 生成 20 条 trigger eval query</h3>
 
-  <section>
-    <h2>源码阅读索引</h2>
-    <ul>
-      <li><code>SKILL.md</code>：总控工作流，包含创建、评估、改进、description 优化、Claude.ai/Cowork 适配说明。</li>
-      <li><code>references/schemas.md</code>：所有 JSON 产物的契约。</li>
-      <li><code>agents/grader.md</code>：如何根据 outputs 和 transcript 判定 assertions。</li>
-      <li><code>agents/analyzer.md</code>：如何从 benchmark 和 transcript 中找模式、风险、非判别性 eval。</li>
-      <li><code>scripts/aggregate_benchmark.py</code>：聚合 pass rate、time、token。</li>
-      <li><code>scripts/run_eval.py</code>：通过 <code>claude -p</code> 和 stream-json 判断 description 是否触发。</li>
-      <li><code>scripts/run_loop.py</code>：串起 eval、改写、train/test holdout、HTML 报告和最佳选择。</li>
-      <li><code>eval-viewer/generate_review.py</code> 与 <code>eval-viewer/viewer.html</code>：生成可交互的输出审阅和 benchmark 页面。</li>
-      <li><code>scripts/quick_validate.py</code> 与 <code>scripts/package_skill.py</code>：发布前校验和打包。</li>
-    </ul>
-  </section>
+<div class="step">
+<span class="who">主 agent</span>
+<p>10 条 should-trigger（不同措辞、不同正式度，有用户不显式说技术名词的情况），10 条 should-not-trigger（关键在<strong>近似词陷阱</strong>——共享关键词但其实需要别的工具的 query）。SKILL.md 给了反面例子："Write a fibonacci function" 当作 PDF skill 的负例毫无价值，因为太显然不会触发。要的是<strong>临界样本</strong>。</p>
+</div>
+
+<h3>Step 2 · 用户在 HTML 里审 query 集</h3>
+
+<div class="step">
+<span class="who">主 agent</span> + <span class="who user">用户</span>
+<p>主 agent 把 <code>assets/eval_review.html</code> 模板里的 <code>__EVAL_DATA_PLACEHOLDER__</code> 等占位符替换成实际数据，写到 <code>/tmp/eval_review_&lt;skill&gt;.html</code> 并 <code>open</code> 它。用户在网页里改 query、改 should_trigger 标签，点 "Export Eval Set"，下载到 <code>~/Downloads/eval_set.json</code>。</p>
+</div>
+
+<h3>Step 3 · 主 agent 启 <code>run_loop.py</code> 后台跑 5 轮</h3>
+
+<div class="step">
+<span class="who bash">Bash · scripts/run_loop.py</span>
+<pre><code>python -m scripts.run_loop \
+  --eval-set &lt;path-to-trigger-eval.json&gt; \
+  --skill-path &lt;path-to-skill&gt; \
+  --model &lt;当前会话用的 model id&gt; \
+  --max-iterations 5 --verbose</code></pre>
+<p>这里有个细节：<code>--model</code> 必须传"当前 Claude Code 会话正在用的那个 model id"。理由是触发逻辑本来就是 model-specific 的——你 Opus 上调好的 description 给 Haiku 用可能 trigger 行为完全不一样。</p>
+
+<p><code>run_loop.py</code> 主循环：</p>
+<ol>
+  <li><strong>切分 eval set：</strong>60% train + 40% test（按 should_trigger 分层洗牌，固定 seed=42 保证可复现）。test 集对 improvement 模型保密，避免 overfit。</li>
+  <li><strong>本轮 evaluate：</strong>调 <code>run_eval()</code>，<code>ProcessPoolExecutor</code> 并发 10 个 worker，对 train+test 一起跑。每个 query 跑 <code>runs_per_query=3</code> 次取均值。</li>
+  <li><strong>判 pass / fail：</strong>trigger_rate ≥ 0.5 视为"会触发"。和 should_trigger 比较得到 pass/fail。</li>
+  <li><strong>如果 train 全 pass 或到第 5 轮：</strong>退出。</li>
+  <li><strong>否则调 <code>improve_description()</code>：</strong>把当前 description、失败样本、所有历史 attempt（test 分数被刻意去掉，模型只看到 train 分数）打包成一个 prompt，调一次 <code>claude -p</code> 让它写新 description。</li>
+  <li><strong>选 best：</strong>5 轮后，按 test 集分数（不是 train）取最高的那版作 <code>best_description</code>——这是 "selected by test score rather than train" 那行注释的实际含义。</li>
+</ol>
+</div>
+
+<h3><code>run_eval.py</code> 怎么真的测一个 description 会不会触发</h3>
+
+<p>这是整个流程最巧妙的一段，值得单独讲。<code>run_single_query()</code> 的流程：</p>
+
+<ol>
+  <li><strong>临时建一个 command 文件：</strong>把待测 description 写成
+  <code>&lt;project-root&gt;/.claude/commands/&lt;skill-name&gt;-skill-&lt;8位随机后缀&gt;.md</code>，
+  里面 YAML frontmatter 就放这条 description。这样它就出现在 Claude Code 的 <code>available_skills</code> 列表里。</li>
+  <li><strong>启一个独立 <code>claude -p</code>：</strong>用 <code>subprocess.Popen</code> 跑
+  <code>claude -p &lt;query&gt; --output-format stream-json --include-partial-messages</code>。
+  特意删掉 <code>CLAUDECODE</code> 环境变量，绕开"不允许嵌套"的检查。</li>
+  <li><strong>读 stream event 检测触发：</strong>一旦看到 <code>content_block_start</code> 且
+  <code>tool_use.name == "Skill"</code>，再看 <code>input_json_delta</code> 里有没有那个 unique 名字——
+  有就立刻返回 True，杀掉子进程；如果出现了别的 tool（说明 Claude 决定不用 skill），返回 False。</li>
+  <li><strong>清理：</strong>不论成功失败，删掉那个临时 command 文件。</li>
+</ol>
+
+<p>为什么要<strong>用 stream event 早判</strong>而不是等最终消息？因为如果等 skill 真的被加载然后跑完，每条 query 都要等 30 秒；而看 stream 在 skill 名字出现的那个 partial JSON 就能 ≤1 秒判定。20 条 query × 3 次 × 5 轮 = 300 次 <code>claude -p</code>，省这个等待是数量级差距。</p>
+
+<h3><code>improve_description.py</code> 长什么样</h3>
+
+<p>就是把 (failed_triggers, false_triggers, history, 整个 SKILL.md body) 拼成一个 prompt，调一次 <code>claude -p --output-format text</code> 让它在 <code>&lt;new_description&gt;...&lt;/new_description&gt;</code> 里返回新版。prompt 里有几条值得留意的策略：</p>
+<ul>
+  <li>"do NOT repeat these — try something <strong>structurally different</strong>" —— 鼓励模型换句式、换角度，不是局部微调</li>
+  <li>"generalize from the failures to broader categories of user intent" —— 不要列具体 query，要抽象到意图类别</li>
+  <li>1024 字符硬上限。如果模型超了，就再 call 一次 <code>claude -p</code>，引用上一版的过长结果让它压缩</li>
+</ul>
+
+<h3>Step 4 · 应用结果</h3>
+
+<div class="step">
+<span class="who">主 agent</span>
+<p><code>run_loop</code> 输出的 JSON 里有 <code>best_description</code>。主 agent 把它写回 SKILL.md frontmatter，给用户看 before/after 和分数对比。</p>
+</div>
+</section>
+
+<!-- ============================================================== -->
+<section>
+<h2>7 · D · Ship 阶段</h2>
+
+<div class="step">
+<span class="who bash">Bash · quick_validate.py</span>
+<p>检查 SKILL.md frontmatter：<code>name</code> 必须 kebab-case、≤64 字符；<code>description</code> 必须存在、≤1024 字符、不能含 <code>&lt;</code> 或 <code>&gt;</code>；允许的顶级 key 只有 <code>name / description / license / allowed-tools / metadata / compatibility</code> 六个。</p>
+</div>
+
+<div class="step">
+<span class="who bash">Bash · package_skill.py</span>
+<p>先调 <code>validate_skill()</code> 卡一道，过了再把整个 skill 目录打成 zip，扩展名 <code>.skill</code>。打包时排除 <code>__pycache__/</code> / <code>node_modules/</code> / <code>*.pyc</code> / <code>.DS_Store</code>；<strong>根目录下的 <code>evals/</code> 整个排除</strong>（测试用例不该跟着发布走），但嵌套更深的 <code>evals/</code> 不排除——这条规则在 <code>ROOT_EXCLUDE_DIRS</code> 里。</p>
+</div>
+</section>
+
+<!-- ============================================================== -->
+<section>
+<h2>8 · 这套评测的两条硬性局限</h2>
+
+<p>读到这里应该能意识到一件事：B 阶段所有"跑 skill"的动作都发生在 <strong>Task subagent 内部</strong>，
+而 Task subagent 在 Claude Code 里有两条结构性约束。它们直接决定了哪些类型的 skill 用这套评测<strong>测不动</strong>。</p>
+
+<h3>局限 ① · 测不了"自己还要派 subagent"的 skill</h3>
+
+<div class="note warn">
+<p>executor 本身就是一个 Task subagent。而 Claude Code 的 Task 工具<strong>默认不允许嵌套</strong>——
+subagent 里通常拿不到 Task 工具（具体取决于 subagent type 的 tool 白名单，但默认 Task 不在内）。</p>
+<p>所以如果你正在写的 skill 是 orchestrator 类型——比如它的核心动作就是"派一组 worker subagent 并行处理 N 个文件"、
+"派一个 reviewer subagent 评审 PR"——那么 executor 跑到那一步要么报错、要么 fallback 成自己 inline 做，
+评测结果反映不出 skill 在<strong>真实场景下</strong>（用户在主 agent 里调用时，Task 是可用的）的表现。</p>
+</div>
+
+<h3>局限 ② · 测不了多轮交互的 skill</h3>
+
+<div class="note warn">
+<p>executor 的 prompt 模板是固定的：</p>
+<pre><code>Execute this task:
+- Skill path: ...
+- Task: &lt;eval prompt&gt;
+- Input files: ...
+- Save outputs to: ...</code></pre>
+<p>一次性派发、一次性收回。<strong>中间没有任何机制让 executor 回头问用户问题</strong>。</p>
+<p>很多 skill 的精髓恰恰在多轮交互：先访谈用户搞清楚意图、根据中间结果让用户做选择、出 plan 等用户确认、根据用户反驳调整方向……
+这些 skill 在 B 阶段只能被压成"单 prompt 输入 → 单产物输出"的退化形态来测。
+退化版本的 pass rate 高，不代表真实使用体验好；反过来真实体验好的 skill 在退化测试里也可能拿不到分。</p>
+<p>C 阶段的 description optimization 也共享这条局限——<code>claude -p</code> 本来就是 one-shot 非交互模式，
+触发判定看的就是"用户单条 query 进来，会不会加载 skill"，多轮澄清后才显出价值的 skill 在 trigger eval 上同样吃亏。</p>
+</div>
+
+<h3>什么 skill 适合这套评测</h3>
+
+<p>反过来说，这套评测最适合的形态非常窄：<strong>一次派发、自包含完成、产物可客观判分</strong> 的任务型 skill。例如：</p>
+<ul>
+  <li>文件转换类（invoice → CSV、Markdown → docx、log → 结构化 JSON）</li>
+  <li>固定 workflow 类（按模板生成报告、按规则改写代码）</li>
+  <li>有确定性脚本可挂载的类（OCR、PDF 表单填写、图表绘制）</li>
+</ul>
+
+<p>不太适合：</p>
+<ul>
+  <li>orchestrator / multi-agent 类（局限 ①）</li>
+  <li>需要澄清式访谈或迭代调整的 advisory 类（局限 ②）</li>
+  <li>主观风格类（虽然能跑，但 SKILL.md 自己也说这类"better evaluated qualitatively"，跑量化 benchmark 意义不大）</li>
+</ul>
+</section>
+
+<!-- ============================================================== -->
+<section>
+<h2>9 · 容易被忽略的工程决策</h2>
+
+<table>
+<thead><tr><th>设计</th><th>原因</th></tr></thead>
+<tbody>
+<tr><td>B 阶段 executor 必须同 turn 派</td><td>跨 turn 的 Task 会被串行化；2N 个 executor 一起后台跑 wall clock 才真的并行</td></tr>
+<tr><td>assertions 在 executor 跑期间起草</td><td>Step 1 派完任务，主 agent 有几分钟空闲；不利用就是浪费</td></tr>
+<tr><td>timing 数据必须在 notification 到达时立刻写盘</td><td>那条 notification 是唯一来源；过了就再也拿不到 token/duration</td></tr>
+<tr><td>grading.json 字段名硬约束 <code>text/passed/evidence</code></td><td>viewer 直接拿这三个 key 显示；主 agent 给 grader subagent 派任务时必须指定，不然 viewer 空白</td></tr>
+<tr><td>C 阶段用 <code>claude -p</code> 而不是 Task subagent</td><td>要模拟"陌生 Claude Code 会话第一次看见这个 skill"的判断；Task 共享父进程上下文，做不到</td></tr>
+<tr><td>C 阶段必须传当前 session 的 model id</td><td>不同 model 的触发偏好不同；用错 model 调出来的 description 上线就退化</td></tr>
+<tr><td>improvement 模型看不到 test 分数（blinded_history）</td><td>避免主动 overfit 到 test；test 只在最后选 best 时用</td></tr>
+<tr><td>run_eval 用 stream event 早判触发</td><td>每条 query 从 30s 压到 1s 内，300 次 query 才跑得动</td></tr>
+<tr><td>临时 command 文件每次用新 unique 后缀</td><td>20 worker 并发时避免名字冲突 + 防止前一次的残留干扰判断</td></tr>
+<tr><td>analyzer benchmark 模式不能提改进建议</td><td>角色分工：模式发现归 analyzer，改 skill 归主 agent 的 improvement 步骤</td></tr>
+</tbody>
+</table>
+</section>
+
+<!-- ============================================================== -->
+<section>
+<h2>10 · 一句话总结每个角色</h2>
+
+<table>
+<thead><tr><th>角色</th><th>谁</th><th>一句话</th></tr></thead>
+<tbody>
+<tr><td>主 agent</td><td>当前 Claude Code 会话</td><td>读 SKILL.md 当剧本，访谈、draft、派 subagent、跑脚本、改进、循环</td></tr>
+<tr><td>Executor</td><td>Task subagent</td><td>装作普通用户跑一次 eval prompt，留下 transcript 和产物</td></tr>
+<tr><td>Grader</td><td>Task subagent</td><td>读一个 run 的 transcript+outputs，按 assertions 给 pass/fail 和 evidence</td></tr>
+<tr><td>Analyzer（benchmark）</td><td>Task subagent</td><td>在跨 run 数据里捞模式，但不提改进建议</td></tr>
+<tr><td>Comparator</td><td>Task subagent</td><td>盲评 A/B 两份 output，按 rubric 选赢家</td></tr>
+<tr><td>Analyzer（post-hoc）</td><td>Task subagent</td><td>unblind 后分析赢家为什么赢，输出有优先级的 improvement_suggestions</td></tr>
+<tr><td>run_loop.py</td><td>Bash Python 脚本</td><td>组织 5 轮 "测当前 description → 让 LLM 改 → 再测"，按 test 分数选最优</td></tr>
+<tr><td>claude -p worker</td><td>独立 Claude Code 进程</td><td>装作陌生会话，告诉脚本"这条 description 会不会让我加载这个 skill"</td></tr>
+<tr><td>用户</td><td>人</td><td>确认 prompts、审 viewer、留 feedback、改 trigger query 集</td></tr>
+</tbody>
+</table>
+</section>
+
 </article>
 </body>
 </html>
