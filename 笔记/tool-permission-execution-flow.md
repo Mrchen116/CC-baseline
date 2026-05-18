@@ -105,7 +105,7 @@
         ▼         ▼         ▼
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                        STAGE 3: 分类器内部机制                               │
+│                       STAGE 3: 分类器内部机制                               │
 └─────────────────────────────────────────────────────────────────────────────┘
 
     [allow / deny / ask 三个分类器结构相同，只是规则源不同]
@@ -362,7 +362,7 @@ API Stream          StreamingToolExecutor      useCanUseTool           BashPermi
    │                        │◄─startSpeculativeClassifierCheck()────────────┤                      │
    │                        │                        │                      │──classifyBashCommand─┤
    │                        │                        │                      │  (allow, 后台)       │
-   │                        │                        │                      │◄─────────────────────┤
+   │                        │                        │                      │◄─────────────────────│
    │                        │                        │                      │  (异步执行中...)      │
    │                        │                        │                      │                      │
    │                        │                        │◄─hasPermissions...───│                      │
@@ -665,7 +665,244 @@ API Stream          StreamingToolExecutor      useCanUseTool           BashPermi
 11. **Allow 分类器** → 弹窗后后台尝试自动批准（Bash/PowerShell 专属）
 12. **默认 passthrough** → 转为 ask（如 WebSearch、MCP、AgentTool auto-mode）
 
-## 九、BashTool 权限决策详解
+## 九、Auto Mode 自动批准模式
+
+> 本节是**第八节全工具流程图**中 **【第一层】mode-based 后处理 → `auto 模式` 分支**的展开详解。
+>
+> 在第八节中，第一层 `hasPermissionsToUseToolInner()` 返回 `ask` 后，会进入 mode-based 后处理层。其中 `auto` 模式（以及 `plan` 模式下 `isAutoModeActive()` 为 true 时）不会直接弹窗，而是通过以下机制尝试自动批准或拒绝。
+
+### 在第八节流程图中的位置
+
+```
+【第一层】mode-based 后处理 (hasPermissionsToUseTool, permissions.ts:473-955)
+  │
+  ├── dontAsk 模式 → deny
+  │
+  ├── auto 模式 → 【本节展开】←══════════════╗
+  │   1) safetyCheck 免疫 → deny/ask           ║
+  │   2) requiresUserInteraction → ask         ║
+  │   3) PowerShell 特殊处理 → ask/deny        ║
+  │   4) acceptEdits fast-path → allow         ║
+  │   5) safe-tool allowlist → allow           ║
+  │   6) YOLO classifier → allow/deny/ask  ←═══╝
+  │   7) denial limit 超限 → ask/abort
+  │
+  └── headless → PermissionRequest hooks → auto-deny
+```
+
+### 1. 触发条件
+
+`permissions.ts:518-927` (`hasPermissionsToUseTool`) 中，第一层 `hasPermissionsToUseToolInner()` 返回 `ask` 后：
+
+```
+if (mode === 'auto') → 进入 auto 模式处理
+if (mode === 'plan' && isAutoModeActive()) → 同样进入 auto 模式处理
+```
+
+### 2. Auto Mode 决策链（含 6 个快速通道）
+
+以下按**优先级顺序**执行，任一通道命中即返回，不再后续：
+
+```
+第一层返回 ask
+      │
+      ▼
+┌─────────────────────────────────────────────────────────────┐
+│ ① safetyCheck 且 classifierApprovable=false                 │
+│    → 免疫：headless 则 deny，否则保持 ask                     │
+│    （如 .git/、.claude/、shell 配置等敏感路径不可被 auto 覆盖）   │
+└─────────────────────────────────────────────────────────────┘
+      │ 未命中
+      ▼
+┌─────────────────────────────────────────────────────────────┐
+│ ② tool.requiresUserInteraction?.()                          │
+│    → 保持 ask（交互型工具不能自动批准）                        │
+└─────────────────────────────────────────────────────────────┘
+      │ 未命中
+      ▼
+┌─────────────────────────────────────────────────────────────┐
+│ ③ PowerShell 工具且 POWERSHELL_AUTO_MODE 未开启              │
+│    → headless 则 deny，否则跳过 classifier、保持 ask          │
+└─────────────────────────────────────────────────────────────┘
+      │ 未命中
+      ▼
+┌─────────────────────────────────────────────────────────────┐
+│ ④ acceptEdits 快速通道（非 Agent/REPL 工具）                  │
+│    → 临时把 mode 改为 acceptEdits，重新跑 tool.checkPermissions()│
+│    → 若返回 allow → 直接批准，跳过 classifier（省一次 API 调用）│
+│    例：CWD 内的文件编辑、安全路径的读写等                      │
+└─────────────────────────────────────────────────────────────┘
+      │ 未命中
+      ▼
+┌─────────────────────────────────────────────────────────────┐
+│ ⑤ Safe-tool allowlist                                       │
+│    → 工具在 allowlist 上 → 直接 allow，跳过 classifier        │
+└─────────────────────────────────────────────────────────────┘
+      │ 未命中
+      ▼
+┌─────────────────────────────────────────────────────────────┐
+│ ⑥ YOLO Classifier (classifyYoloAction)                      │
+│    → 基于完整对话历史判断动作安全性                           │
+│    → 返回 allow / deny / unavailable                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 3. YOLO Classifier 上下文构成
+
+`classifyYoloAction()` (`yoloClassifier.ts:1012`) 的输入上下文由四部分构成：
+
+#### 3.1 System Prompt（四层拼装）
+
+```
+Layer 1: Base Prompt (auto_mode_system_prompt.txt)
+  • 角色：安全分类器
+  • 流程：理解动作 → 检查用户意图 → 评估风险
+  • 决策类别：
+    - BLOCK ALWAYS: 外部代码执行、不可逆本地破坏、未授权持久化、
+                    安全削弱、权限提升、网络服务
+    - BLOCK unless intent: CWD 外写文件、系统级包管理、git push
+    - ALLOW: 读文件、搜索、CWD 内编辑、测试构建、本地 git 操作
+  • 关键约束：只考虑用户消息，不考虑 assistant 文本
+
+Layer 2: Permissions Template
+  External 构建: permissions_external.txt
+  ANT 构建: permissions_anthropic.txt（更详细，含云 CLI/IaC）
+  三段式：Allow Rules / Deny Rules / Environment Context
+
+Layer 3: 用户自定义规则 (settings.autoMode)
+  • allow[]      → 替换 <user_allow_rules_to_replace>
+  • soft_deny[]  → 替换 <user_deny_rules_to_replace>
+  • environment[] → 替换 <user_environment_to_replace>
+  External: 用户规则替换默认值
+  Anthropic: 用户规则追加到默认值
+
+Layer 4: 动态注入（ANT-ONLY）
+  • BASH_CLASSIFIER 开启 → 注入 Bash(prompt:) allow/deny 描述
+  • POWERSHELL_AUTO_MODE → 注入 PS 专用 deny guidance
+```
+
+#### 3.2 Messages / Transcript
+
+从历史 `messages[]` 提取：
+
+| 来源 | 保留内容 | 排除内容 |
+|------|---------|---------|
+| User 消息 | 文本内容 | 图片/附件 |
+| Assistant 消息 | 只保留 `tool_use` 块 | **排除 assistant 文本**（防操控）|
+| Queued Command 附件 | prompt 文本作为 user turn | — |
+
+序列化方式（`toCompactBlock`）：
+
+| 内容 | 默认格式 | JSONL 格式（可选）|
+|------|---------|-----------------|
+| User 文本 | `User: text\n` | `{"user":"text"}\n` |
+| Bash | `Bash ls\n` | `{"Bash":"ls"}\n` |
+| FileEdit | `FileEdit /path: new_string\n` | `{"FileEdit":"/path: new_string"}\n` |
+| Agent | `Agent (Explore): prompt\n` | `{"Agent":"(Explore): prompt"}\n` |
+| 无安全相关性 | `''`（省略） | `''`（省略）|
+
+**toAutoClassifierInput** 是各工具自定义的投影：
+
+| 工具 | 投影输出 |
+|------|---------|
+| BashTool | `input.command` |
+| FileEditTool | `${file_path}: ${new_string}` |
+| FileWriteTool | `${file_path}: ${content}` |
+| AgentTool | `(subagent_type, mode=xxx): ${prompt}` |
+| WebFetchTool | `input.url` |
+| SkillTool | `skill` 名称 |
+| GlobTool/GrepTool | 查询模式 + 路径 |
+
+#### 3.3 Action（当前待评估动作）
+
+```
+formatActionForClassifier(toolName, input)
+→ { role: 'assistant', content: [{type:'tool_use', name, input}] }
+```
+
+追加在 transcript 末尾，与历史 tool_use 用同一序列化方式。
+
+#### 3.4 CLAUDE.md 注入（可选）
+
+```
+{
+  role: 'user',
+  content: [{
+    type: 'text',
+    text: "The following is the user's CLAUDE.md configuration...\n"
+          + "<user_claude_md>\n${claudeMd}\n</user_claude_md>",
+    cache_control: getCacheControl({ querySource: 'auto_mode' })
+  }]
+}
+```
+
+### 4. 两种分类器实现
+
+#### Path A: Tool-use Classifier（传统）
+
+```
+模型被强制调用 classify_result 工具
+→ 输出 {thinking, shouldBlock, reason}
+```
+
+工具 schema：`{thinking: string, shouldBlock: boolean, reason: string}`
+
+#### Path B: 2-Stage XML Classifier（新，GrowthBook 控制）
+
+```
+Stage 1 (Fast)
+  max_tokens: 64, stop_sequences: ["</block>"]
+  suffix: "Err on the side of blocking. <block> immediately."
+  │
+  ├── <block>no</block> → ALLOW，直接返回（省 Stage 2 API 调用）
+  └── <block>yes</block> 或解析失败 → 进入 Stage 2
+       │
+       ▼
+Stage 2 (Thinking)
+  max_tokens: 4096
+  suffix: 要求详细推理，用 <thinking> 再输出 <block>
+  │
+  ├── <block>yes</block><reason>...</reason> → BLOCK
+  ├── <block>no</block> → ALLOW
+  └── 解析失败 → 安全默认 BLOCK
+```
+
+**Cache 策略**：action block 带 `cache_control`，Stage 2 共享 Stage 1 的 transcript+action prefix，保证 Stage 2 的 prefix 有 cache hit。
+
+### 5. 结果处理
+
+| 分类器结果 | 处理 |
+|-----------|------|
+| `shouldBlock: false` | allow，重置 consecutive denials |
+| `shouldBlock: true` | deny，记录 denial，检查是否超限 |
+| 连续 denial 超限 | fallback 到 ask（让用户手动审核）|
+| transcript too long | headless → abort；CLI → fallback 到 ask |
+| unavailable (API 错误) | iron_gate=closed → deny；iron_gate=open → fallback 到 ask |
+| parse failure | 安全默认 → deny |
+
+### 6. Denial Tracking
+
+`denialTracking.ts` 维护两个计数器：
+
+- **consecutiveDenials**：连续被拒次数，allow 时重置
+- **totalDenials**：总会话被拒次数
+
+超过阈值后：
+- CLI → fallback 到 ask（弹窗让用户手动审核）
+- Headless → 抛出 AbortError，终止 agent
+
+### 7. 和 Bash Prompt Classifier 的核心区别
+
+| | Auto Mode (YOLO) | Bash Prompt Classifier |
+|--|------------------|------------------------|
+| **范围** | 跨所有工具 | 仅 BashTool |
+| **输入** | 完整对话历史 (transcript) + 当前 action | 单条命令字符串 + 规则描述 |
+| **判断依据** | "这个动作在当前上下文是否安全" | "这条命令是否匹配某条 prompt 规则" |
+| **模型** | 主循环同模型（或独立配置）| sideQuery (Haiku) |
+| **层级** | 第一层 ask 之后的后处理层 | BashTool 内部第一层阶段 3 |
+| **目的** | 全局安全判断，替代用户弹窗 | 规则语义匹配 |
+
+## 十、BashTool 权限决策详解
 
 > `bashToolHasPermission()` 内部完整流程（`bashPermissions.ts:1663-2554`）。
 > 这是全工具流程图中 Phase 1c → BashTool 分支的展开。
@@ -771,15 +1008,57 @@ API Stream          StreamingToolExecutor      useCanUseTool           BashPermi
 |------|------|------|------|
 | **0** | `parseCommandRaw` / `parseForSecurityFromAst` | AST 解析 + 语义检查 | too-complex / simple / unavailable |
 | **1** | `checkSandboxAutoAllow` | Sandbox 自动放行 | allow / passthrough |
-| **2** | `bashToolCheckExactMatchPermission` | 精确匹配规则 | deny / allow / passthrough |
-| **3** | `classifyBashCommand(..., deny/ask)` | Prompt 分类器 | deny / ask / null |
+| **2** | `bashToolCheckExactMatchPermission` | 精确匹配**普通规则**（字符串匹配：`Bash(git status)`, `Bash(git:*)` 等） | deny / allow / passthrough |
+| **3** | `classifyBashCommand(..., deny/ask)` | **Prompt 规则**语义匹配（`Bash(prompt: ...)`），ANT-ONLY | deny / ask / null |
 | **4** | `checkCommandOperatorPermissions` | 管道/重定向处理 | deny / ask / allow |
 | **5** | `bashCommandIsSafeAsync` | Legacy 安全检查 | ask / passthrough |
 | **6** | `bashToolCheckPermission` | 子命令级权限 | deny / ask / allow |
+
+### Prompt 分类器 `classifyBashCommand`
+
+```
+settings.json 中以 "prompt:" 前缀的规则
+        │
+        │  例: "Bash(prompt: git log and status commands)"
+        ▼
+┌───────────────────────────┐
+│ classifyBashCommand       │
+│ (ANT-ONLY, bashClassifier)│
+│                           │
+│  输入:                    │
+│  • command: 命令字符串    │
+│  • cwd: 执行目录          │
+│  • descriptions[]:        │
+│    prompt规则描述列表     │
+│  • behavior: deny/ask/allow│
+│                           │
+│  sideQuery (Haiku) →      │
+│  "这条命令是否匹配规则描述?"│
+│                           │
+│  输出:                    │
+│  • matches: boolean       │
+│  • matchedDescription     │
+│  • confidence: high/med/low│
+│  • reason: string         │
+└─────────────┬─────────────┘
+              │
+    ┌─────────┼─────────┐
+    │         │         │
+    ▼         ▼         ▼
+ behavior=deny   behavior=ask   behavior=allow
+ + high match    + high match   + high match
+    │              │              │
+    ▼              ▼              ▼
+   deny          ask           allow
+                + pending        │
+                classifier       │
+                               └──→ 第二层自动批准
+```
+
+**第一层只跑 deny + ask**。allow 方向的 `classifyBashCommand` 只在**第二层**运行（coordinator / swarm / main agent 的自动批准逻辑）。
 
 ### 关于 allow classifier 的位置
 
 第一层 (`bashToolHasPermission`) **没有 allow classifier**。allow classifier 只在**第二层**（coordinator / swarm / main agent）中运行，目的是在弹窗显示时/之前尝试**自动批准**。
 
 第一层返回 `ask` 时，会附带 `pendingClassifierCheck`（包含 allow classifier 所需的参数），供第二层使用。
-

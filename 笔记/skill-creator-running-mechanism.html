@@ -1,0 +1,946 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Anthropic skill-creator 运行机制拆解</title>
+  <style>
+    :root {
+      --bg: #f7f7f2;
+      --paper: #ffffff;
+      --ink: #202124;
+      --muted: #667085;
+      --line: #d8ddd2;
+      --accent: #276f86;
+      --accent-2: #8a5a2b;
+      --green: #4f7b45;
+      --code-bg: #eef3f6;
+      --soft: #eef4ef;
+      --soft-blue: #e8f1f5;
+      --warn: #fff4e6;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "PingFang SC", Arial, sans-serif;
+      line-height: 1.72;
+    }
+
+    article {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 48px 24px 72px;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 28px;
+      margin-bottom: 34px;
+    }
+
+    .eyebrow {
+      color: var(--accent);
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      font-size: clamp(32px, 5vw, 56px);
+      line-height: 1.12;
+      margin: 12px 0 16px;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      font-size: 30px;
+      line-height: 1.25;
+      margin: 44px 0 14px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      font-size: 21px;
+      margin: 30px 0 10px;
+      letter-spacing: 0;
+    }
+
+    p { margin: 12px 0; }
+
+    code {
+      background: var(--code-bg);
+      color: #102a43;
+      padding: 2px 6px;
+      border-radius: 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: .92em;
+    }
+
+    pre {
+      overflow: auto;
+      background: #0f1720;
+      color: #e6edf3;
+      padding: 18px;
+      border-radius: 8px;
+      line-height: 1.55;
+      font-size: 14px;
+    }
+
+    pre code {
+      background: transparent;
+      color: inherit;
+      padding: 0;
+      border-radius: 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 18px 0 24px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      display: table;
+    }
+
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 12px 14px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #23323a;
+      color: white;
+      font-weight: 650;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    .lead {
+      font-size: 20px;
+      color: #394150;
+      max-width: 850px;
+    }
+
+    .note {
+      border-left: 4px solid var(--accent);
+      background: var(--soft-blue);
+      padding: 14px 18px;
+      border-radius: 0 8px 8px 0;
+      margin: 18px 0;
+    }
+
+    .callout {
+      background: var(--soft);
+      border: 1px solid #cad8c8;
+      border-radius: 8px;
+      padding: 18px;
+      margin: 20px 0;
+    }
+
+    .warning {
+      background: var(--warn);
+      border-color: #e0bc8d;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin: 20px 0;
+    }
+
+    .card {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+    }
+
+    .card strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--accent);
+    }
+
+    .file-map {
+      display: grid;
+      grid-template-columns: 1.1fr 1.5fr;
+      gap: 16px;
+      margin: 22px 0;
+    }
+
+    .tree {
+      background: #101820;
+      color: #e9f1f7;
+      border-radius: 8px;
+      padding: 18px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 14px;
+      white-space: pre;
+      overflow: auto;
+    }
+
+    .diagram {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+      margin: 22px 0;
+      overflow: auto;
+    }
+
+    .diagram-title {
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+
+    .diagram svg {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    svg text {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", Arial, sans-serif;
+      fill: var(--ink);
+    }
+
+    .figure-caption {
+      color: var(--muted);
+      font-size: 14px;
+      margin-top: 10px;
+    }
+
+    .artifact-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin: 18px 0;
+    }
+
+    .artifact {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      min-height: 118px;
+    }
+
+    .artifact b { display: block; margin-bottom: 8px; }
+
+    .pill {
+      display: inline-block;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: 999px;
+      padding: 3px 10px;
+      font-size: 13px;
+      color: var(--muted);
+      margin: 2px 4px 2px 0;
+    }
+
+    @media (max-width: 760px) {
+      article { padding: 28px 16px 56px; }
+      h1 { font-size: 34px; }
+      h2 { font-size: 25px; }
+      .grid, .file-map, .artifact-grid { grid-template-columns: 1fr; }
+      th, td { padding: 10px; }
+    }
+  </style>
+</head>
+<body>
+<article>
+  <header>
+    <div class="eyebrow">Anthropic skill-creator</div>
+    <h1>skill-creator 运行机制拆解：把 skill 当成可评估的工程资产</h1>
+    <p class="lead">
+      <code>skill-creator</code> 不是简单的模板生成器。它更像一条围绕 skill 的小型 CI 流水线：
+      先定义触发意图，再写 <code>SKILL.md</code>，然后用测试提示词、基线对照、评分器、HTML 审阅器和
+      description 优化器不断迭代。
+    </p>
+  </header>
+
+  <section>
+    <h2>一、先给结论：它不是模板生成器，而是 skill 的 CI 流水线</h2>
+    <p>
+      普通的 prompt 工程通常止步于“写一段更好的说明”。<code>skill-creator</code> 的思路更工程化：
+      把 skill 看成一个可以被触发、执行、评测、对照、复盘、再发布的能力模块。
+    </p>
+    <div class="grid">
+      <div class="card">
+        <strong>创建</strong>
+        先问清楚 skill 要解决什么任务、什么时候触发、输出格式是什么、成功标准是什么。
+      </div>
+      <div class="card">
+        <strong>评测</strong>
+        对同一批 eval 同时跑 with-skill 和 baseline，再用 grader、benchmark、viewer 判断是否真的变好。
+      </div>
+      <div class="card">
+        <strong>优化</strong>
+        根据人类反馈和失败样本修改 <code>SKILL.md</code>、脚本、示例和 description，进入下一轮 iteration。
+      </div>
+    </div>
+    <p>
+      如果把普通 prompt 看成“手写操作说明”，skill 更接近“带文档、脚本、测试、发布包的能力模块”。
+      这也是它最像深度学习调参的地方：eval set 是数据集，assertions 是监督信号，with-skill/baseline 是消融实验，
+      viewer 是人工标注界面，description 优化则像一个小型路由分类器实验。
+    </p>
+  </section>
+
+  <section>
+    <h2>二、先看全局：skill-creator 的完整闭环</h2>
+    <p>
+      在拆 eval、grader、description 优化之前，先看整张地图。主流程是：
+      先产出一个可测试的 skill，再用评估循环打磨能力质量，最后优化 description 的触发边界并打包发布。
+    </p>
+
+    <div class="diagram">
+      <div class="diagram-title">图 1：skill-creator 的 whole picture</div>
+      <svg viewBox="0 0 900 820" role="img" aria-label="skill creator whole picture">
+        <defs>
+          <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#276f86"></path>
+          </marker>
+          <marker id="arrowBrown" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#8a5a2b"></path>
+          </marker>
+        </defs>
+
+        <rect x="40" y="40" width="820" height="150" rx="12" fill="#ffffff" stroke="#d8ddd2"></rect>
+        <text x="65" y="76" font-size="16" font-weight="700" fill="#276f86">A. Draft：先产出一个可测试的 skill</text>
+        <rect x="78" y="105" width="190" height="55" rx="8" fill="#e8f1f5" stroke="#a9c5d0"></rect>
+        <text x="173" y="130" text-anchor="middle" font-size="13" font-weight="700">1. 捕获意图</text>
+        <text x="173" y="150" text-anchor="middle" font-size="12">任务 / 触发 / 输出</text>
+        <line x1="268" y1="133" x2="318" y2="133" stroke="#276f86" stroke-width="3" marker-end="url(#arrow)"></line>
+        <rect x="325" y="105" width="190" height="55" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
+        <text x="420" y="130" text-anchor="middle" font-size="13" font-weight="700">2. 写 SKILL.md</text>
+        <text x="420" y="150" text-anchor="middle" font-size="12">说明 + 资源指针</text>
+        <line x1="515" y1="133" x2="565" y2="133" stroke="#276f86" stroke-width="3" marker-end="url(#arrow)"></line>
+        <rect x="572" y="105" width="190" height="55" rx="8" fill="#eef4ef" stroke="#b8cdb4"></rect>
+        <text x="667" y="130" text-anchor="middle" font-size="13" font-weight="700">3. 生成 eval set</text>
+        <text x="667" y="150" text-anchor="middle" font-size="12">真实 prompt + 文件</text>
+
+        <rect x="40" y="220" width="820" height="310" rx="12" fill="#ffffff" stroke="#d8ddd2"></rect>
+        <text x="65" y="258" font-size="16" font-weight="700">B. Evaluate：这个 skill 用起来是否真的更好？</text>
+        <rect x="95" y="310" width="170" height="62" rx="8" fill="#eef4ef" stroke="#b8cdb4"></rect>
+        <text x="180" y="336" text-anchor="middle" font-size="13" font-weight="700">4A. with_skill</text>
+        <text x="180" y="356" text-anchor="middle" font-size="12">当前 skill 执行</text>
+        <rect x="95" y="410" width="170" height="62" rx="8" fill="#fff4e6" stroke="#e0bc8d"></rect>
+        <text x="180" y="436" text-anchor="middle" font-size="13" font-weight="700">4B. baseline</text>
+        <text x="180" y="456" text-anchor="middle" font-size="12">不用 skill / 旧 skill</text>
+        <line x1="265" y1="341" x2="340" y2="385" stroke="#276f86" stroke-width="3" marker-end="url(#arrow)"></line>
+        <line x1="265" y1="441" x2="340" y2="397" stroke="#276f86" stroke-width="3" marker-end="url(#arrow)"></line>
+        <rect x="350" y="355" width="150" height="75" rx="8" fill="#e8f1f5" stroke="#a9c5d0"></rect>
+        <text x="425" y="385" text-anchor="middle" font-size="14" font-weight="700">5. Grader</text>
+        <text x="425" y="407" text-anchor="middle" font-size="12">assertions 判分</text>
+        <line x1="500" y1="392" x2="565" y2="392" stroke="#276f86" stroke-width="3" marker-end="url(#arrow)"></line>
+        <rect x="575" y="355" width="145" height="75" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
+        <text x="647" y="385" text-anchor="middle" font-size="14" font-weight="700">6. Benchmark</text>
+        <text x="647" y="407" text-anchor="middle" font-size="12">pass / time / token</text>
+        <line x1="720" y1="392" x2="770" y2="392" stroke="#276f86" stroke-width="3" marker-end="url(#arrow)"></line>
+        <rect x="775" y="355" width="65" height="75" rx="8" fill="#fff4e6" stroke="#e0bc8d"></rect>
+        <text x="807" y="385" text-anchor="middle" font-size="14" font-weight="700">7. Viewer</text>
+        <text x="807" y="407" text-anchor="middle" font-size="12">人工反馈</text>
+        <path d="M807 430 L807 500 L420 500 L420 170" fill="none" stroke="#8a5a2b" stroke-width="3" marker-end="url(#arrowBrown)"></path>
+        <text x="455" y="488" font-size="12" fill="#8a5a2b">不满意：修改 SKILL.md / scripts / examples，再跑下一轮</text>
+
+        <rect x="40" y="565" width="405" height="150" rx="12" fill="#ffffff" stroke="#a9c5d0"></rect>
+        <text x="65" y="603" font-size="16" font-weight="700" fill="#276f86">C. Trigger：触发质量循环</text>
+        <text x="65" y="627" font-size="12" fill="#667085">问题：该触发时触发，不该触发时不触发</text>
+        <rect x="80" y="660" width="100" height="42" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
+        <text x="130" y="686" text-anchor="middle" font-size="12" font-weight="700">desc eval</text>
+        <line x1="180" y1="681" x2="230" y2="681" stroke="#276f86" stroke-width="3" marker-end="url(#arrow)"></line>
+        <rect x="238" y="660" width="100" height="42" rx="8" fill="#e8f1f5" stroke="#a9c5d0"></rect>
+        <text x="288" y="686" text-anchor="middle" font-size="12" font-weight="700">run_eval</text>
+        <line x1="338" y1="681" x2="380" y2="681" stroke="#276f86" stroke-width="3" marker-end="url(#arrow)"></line>
+        <rect x="386" y="660" width="45" height="42" rx="8" fill="#eef4ef" stroke="#b8cdb4"></rect>
+        <text x="408" y="686" text-anchor="middle" font-size="12" font-weight="700">改描述</text>
+
+        <rect x="500" y="565" width="360" height="150" rx="12" fill="#ffffff" stroke="#d8ddd2"></rect>
+        <text x="525" y="603" font-size="16" font-weight="700">D. Ship：发布</text>
+        <text x="525" y="627" font-size="12" fill="#667085">description 和能力都满意后再发布</text>
+        <rect x="555" y="660" width="130" height="42" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
+        <text x="620" y="686" text-anchor="middle" font-size="12" font-weight="700">quick_validate.py</text>
+        <line x1="685" y1="681" x2="735" y2="681" stroke="#276f86" stroke-width="3" marker-end="url(#arrow)"></line>
+        <rect x="742" y="660" width="90" height="42" rx="8" fill="#eef4ef" stroke="#b8cdb4"></rect>
+        <text x="787" y="686" text-anchor="middle" font-size="12" font-weight="700">package .skill</text>
+      </svg>
+      <p class="figure-caption">
+        读后面的细节时可以反复回到这张图定位：第三节是源码目录地图；第四节讲 Draft；第五节讲 eval set 和 with-skill/baseline；
+        第六节讲 grader、benchmark、viewer；第七节讲 description 触发质量循环。
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>三、源码目录地图：每个文件支撑流程图里的哪一段</h2>
+    <p>
+      这个目录本身是全局地图，不属于 A 阶段。更准确的理解是：
+      <code>SKILL.md</code> 是总控剧本，<code>scripts/</code> 是自动化执行器，
+      <code>agents/</code> 是评审角色，<code>references/</code> 定义数据协议，
+      <code>eval-viewer/</code> 和 <code>assets/</code> 负责把结果交给人审。
+    </p>
+
+    <div class="file-map">
+      <div class="tree">skill-creator/
+├── SKILL.md                         # 总控流程：创建、评测、改进、触发优化、打包
+├── references/
+│   └── schemas.md                   # evals / grading / benchmark / feedback 的 JSON 契约
+├── agents/
+│   ├── grader.md                    # 读 outputs/transcript，对 assertions 判分
+│   ├── analyzer.md                  # 分析 benchmark 和 transcript，找模式与风险
+│   └── comparator.md                # 盲评两个结果，判断哪个更好
+├── scripts/
+│   ├── aggregate_benchmark.py       # 聚合 pass rate / time / token
+│   ├── run_eval.py                  # 用 claude -p 检测 description 是否触发
+│   ├── improve_description.py       # 根据误触发/漏触发改写 description
+│   ├── run_loop.py                  # train/test split + 多轮 description 优化
+│   ├── quick_validate.py            # 校验 SKILL.md frontmatter
+│   └── package_skill.py             # 打包 .skill，排除开发资产
+├── eval-viewer/
+│   ├── generate_review.py           # 生成 HTML 审阅页面
+│   └── viewer.html                  # 交互式查看输出、指标和反馈
+└── assets/
+    └── eval_review.html             # 让用户审阅 should-trigger eval set</div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>文件</th>
+            <th>对应阶段</th>
+            <th>作用</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>SKILL.md</code></td>
+            <td>A/B/C/D 横跨</td>
+            <td>定义 skill-creator 的完整协作流程：创建 skill、跑 eval、收集反馈、优化 description、打包发布。</td>
+          </tr>
+          <tr>
+            <td><code>references/schemas.md</code></td>
+            <td>B Evaluate</td>
+            <td>定义 <code>evals.json</code>、<code>grading.json</code>、<code>benchmark.json</code> 等数据结构，保证脚本和 viewer 能对齐。</td>
+          </tr>
+          <tr>
+            <td><code>agents/grader.md</code>、<code>agents/analyzer.md</code>、<code>agents/comparator.md</code></td>
+            <td>B Evaluate</td>
+            <td>提供评分、分析和盲评角色，用来把输出结果转成可讨论的质量信号。</td>
+          </tr>
+          <tr>
+            <td><code>scripts/aggregate_benchmark.py</code></td>
+            <td>B Evaluate</td>
+            <td>把每个 run 的 <code>grading.json</code> 和 <code>timing.json</code> 聚合成 pass rate、耗时、token 的 benchmark。</td>
+          </tr>
+          <tr>
+            <td><code>eval-viewer/generate_review.py</code>、<code>eval-viewer/viewer.html</code></td>
+            <td>B Evaluate</td>
+            <td>生成可交互 HTML，让用户并排看 with-skill 和 baseline 的产物、指标、反馈入口。</td>
+          </tr>
+          <tr>
+            <td><code>assets/eval_review.html</code></td>
+            <td>C Trigger</td>
+            <td>让用户审阅 should-trigger / should-not-trigger 查询集，导出 description eval set。</td>
+          </tr>
+          <tr>
+            <td><code>scripts/run_eval.py</code>、<code>scripts/improve_description.py</code>、<code>scripts/run_loop.py</code></td>
+            <td>C Trigger</td>
+            <td>检测 description 是否触发、根据失败样本改写 description，并用 train/test split 选择最佳版本。</td>
+          </tr>
+          <tr>
+            <td><code>scripts/quick_validate.py</code>、<code>scripts/package_skill.py</code></td>
+            <td>D Ship</td>
+            <td>发布前做结构校验，并把最终 skill 打成 <code>.skill</code> 包。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>四、A Draft：把想法变成一个可测试的 skill</h2>
+    <p>
+      Draft 阶段不是直接写一大段提示词，而是先把 skill 的边界问清楚：
+      什么时候触发，输入是什么，输出是什么，是否需要脚本、模板、示例文件，以及怎样才算成功。
+    </p>
+
+    <pre><code>---
+name: invoice-extractor
+description: Use this skill when the user needs to extract structured fields from vendor invoices, normalize currencies, and produce a CSV for accounting review.
+---
+
+# Invoice Extractor
+
+Use this workflow when the user gives invoice PDFs, screenshots, or spreadsheets and asks for structured accounting data.
+
+1. Inspect every input file.
+2. Extract vendor, invoice number, date, amount, tax, currency, and missing fields.
+3. Produce a CSV and a short review note.
+4. Use bundled scripts when available instead of hand-rolling parsing logic.</code></pre>
+
+    <div class="diagram">
+      <div class="diagram-title">图 2：Skill 的三层加载</div>
+      <svg viewBox="0 0 760 250" role="img" aria-label="three level skill loading">
+        <defs>
+          <marker id="arrowLoad" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#276f86"></path>
+          </marker>
+        </defs>
+        <rect x="35" y="70" width="180" height="90" rx="8" fill="#e8f1f5" stroke="#a9c5d0"></rect>
+        <text x="125" y="102" text-anchor="middle" font-size="15" font-weight="700">frontmatter</text>
+        <text x="125" y="128" text-anchor="middle" font-size="13">name + description</text>
+        <text x="125" y="150" text-anchor="middle" font-size="12">决定是否触发</text>
+        <line x1="215" y1="115" x2="290" y2="115" stroke="#276f86" stroke-width="3" marker-end="url(#arrowLoad)"></line>
+        <rect x="300" y="70" width="180" height="90" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
+        <text x="390" y="102" text-anchor="middle" font-size="15" font-weight="700">SKILL.md body</text>
+        <text x="390" y="128" text-anchor="middle" font-size="13">触发后读取</text>
+        <text x="390" y="150" text-anchor="middle" font-size="12">流程、规则、边界</text>
+        <line x1="480" y1="115" x2="555" y2="115" stroke="#276f86" stroke-width="3" marker-end="url(#arrowLoad)"></line>
+        <rect x="565" y="70" width="160" height="90" rx="8" fill="#eef4ef" stroke="#b8cdb4"></rect>
+        <text x="645" y="102" text-anchor="middle" font-size="15" font-weight="700">resources</text>
+        <text x="645" y="128" text-anchor="middle" font-size="13">scripts / examples</text>
+        <text x="645" y="150" text-anchor="middle" font-size="12">按需读取或执行</text>
+      </svg>
+      <p class="figure-caption">
+        第一层只有 <code>name</code> 和 <code>description</code>，它决定是否打开 skill。第二层是主说明，第三层是脚本、模板和示例。
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>五、B Evaluate：先证明 skill 真的有用</h2>
+    <p>
+      这个阶段的核心问题不是“skill 看起来是不是专业”，而是“同样的任务，用 skill 是否真的更好”。
+      因此每个测试用例都要跑两遍：一遍带 skill，一遍作为 baseline。
+    </p>
+
+    <h3>eval set 是怎么生成的</h3>
+    <p>
+      eval set 不是凭空写出来的。<code>SKILL.md</code> 要求写完 skill draft 后，先提出 2-3 个真实测试 prompt 给用户确认。
+      用户确认后保存到 <code>evals/evals.json</code>。初始文件主要包含 <code>prompt</code>、<code>expected_output</code> 和输入文件路径，
+      assertions 可以在 run 进行时补充。
+    </p>
+
+    <div class="diagram">
+      <div class="diagram-title">图 3：eval set 的生成过程</div>
+      <svg viewBox="0 0 760 300" role="img" aria-label="eval set generation">
+        <defs>
+          <marker id="arrowEval" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#276f86"></path>
+          </marker>
+        </defs>
+        <rect x="35" y="95" width="145" height="75" rx="8" fill="#e8f1f5" stroke="#a9c5d0"></rect>
+        <text x="107" y="125" text-anchor="middle" font-size="14" font-weight="700">真实用户意图</text>
+        <text x="107" y="148" text-anchor="middle" font-size="12">任务 + 文件 + 成功标准</text>
+        <line x1="180" y1="132" x2="235" y2="132" stroke="#276f86" stroke-width="3" marker-end="url(#arrowEval)"></line>
+        <rect x="245" y="80" width="160" height="105" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
+        <text x="325" y="112" text-anchor="middle" font-size="14" font-weight="700">候选测试 prompt</text>
+        <text x="325" y="137" text-anchor="middle" font-size="12">Claude 生成 2-3 个</text>
+        <text x="325" y="160" text-anchor="middle" font-size="12">用户确认或修改</text>
+        <line x1="405" y1="132" x2="460" y2="132" stroke="#276f86" stroke-width="3" marker-end="url(#arrowEval)"></line>
+        <rect x="470" y="80" width="160" height="105" rx="8" fill="#eef4ef" stroke="#b8cdb4"></rect>
+        <text x="550" y="112" text-anchor="middle" font-size="14" font-weight="700">evals/evals.json</text>
+        <text x="550" y="137" text-anchor="middle" font-size="12">prompt + expected_output</text>
+        <text x="550" y="160" text-anchor="middle" font-size="12">files + assertions</text>
+      </svg>
+      <p class="figure-caption">
+        eval set 的来源是用户真实任务，而不是抽象题目。后续所有 with-skill/baseline 都围绕这批任务展开。
+      </p>
+    </div>
+
+    <pre><code>{
+  "evals": [
+    {
+      "id": 1,
+      "name": "vendor-tax-csv",
+      "prompt": "读取 Downloads/invoices 里的三张供应商发票 PDF，输出 vendor、invoice_no、date、amount、tax、currency 六列 CSV。",
+      "expected_output": "生成可被财务复核的 CSV，并标出缺失字段。",
+      "files": ["evals/files/vendor-a.pdf", "evals/files/vendor-b.pdf", "evals/files/vendor-c.pdf"],
+      "expectations": []
+    }
+  ]
+}</code></pre>
+
+    <h3>一次 eval 为什么要跑两条线</h3>
+    <div class="diagram">
+      <div class="diagram-title">图 4：一次 eval 为什么要跑两条线</div>
+      <svg viewBox="0 0 760 350" role="img" aria-label="with skill versus baseline">
+        <defs>
+          <marker id="arrowTwo" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#276f86"></path>
+          </marker>
+        </defs>
+        <rect x="35" y="135" width="150" height="80" rx="8" fill="#e8f1f5" stroke="#a9c5d0"></rect>
+        <text x="110" y="166" text-anchor="middle" font-size="14" font-weight="700">同一个 eval prompt</text>
+        <text x="110" y="190" text-anchor="middle" font-size="12">同一批输入文件</text>
+        <line x1="185" y1="165" x2="270" y2="100" stroke="#276f86" stroke-width="3" marker-end="url(#arrowTwo)"></line>
+        <line x1="185" y1="190" x2="270" y2="250" stroke="#276f86" stroke-width="3" marker-end="url(#arrowTwo)"></line>
+        <rect x="280" y="60" width="175" height="90" rx="8" fill="#eef4ef" stroke="#b8cdb4"></rect>
+        <text x="367" y="92" text-anchor="middle" font-size="15" font-weight="700">with_skill run</text>
+        <text x="367" y="118" text-anchor="middle" font-size="12">读取当前 SKILL.md</text>
+        <rect x="280" y="220" width="175" height="90" rx="8" fill="#fff4e6" stroke="#e0bc8d"></rect>
+        <text x="367" y="252" text-anchor="middle" font-size="15" font-weight="700">baseline run</text>
+        <text x="367" y="278" text-anchor="middle" font-size="12">不用 skill / 旧 skill</text>
+        <line x1="455" y1="105" x2="535" y2="105" stroke="#276f86" stroke-width="3" marker-end="url(#arrowTwo)"></line>
+        <line x1="455" y1="265" x2="535" y2="265" stroke="#276f86" stroke-width="3" marker-end="url(#arrowTwo)"></line>
+        <rect x="545" y="60" width="170" height="90" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
+        <text x="630" y="92" text-anchor="middle" font-size="14" font-weight="700">with_skill/outputs</text>
+        <text x="630" y="118" text-anchor="middle" font-size="12">outputs + transcript + timing</text>
+        <rect x="545" y="220" width="170" height="90" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
+        <text x="630" y="252" text-anchor="middle" font-size="14" font-weight="700">baseline/outputs</text>
+        <text x="630" y="278" text-anchor="middle" font-size="12">outputs + transcript + timing</text>
+      </svg>
+      <p class="figure-caption">
+        这是控制变量实验：prompt 和输入文件相同，变量只有一个，即是否让 Claude 使用当前 skill。
+      </p>
+    </div>
+
+    <div class="callout">
+      <strong>两套启动方式不要混淆。</strong>
+      <p>
+        能力质量评测不是通过命令行重新跑 <code>claude -p</code>，而是由正在使用
+        <code>skill-creator</code> 的主控 agent 直接启动 subagent：一个 subagent 走
+        <code>with_skill</code>，另一个 subagent 走 baseline。
+        这个设计有一个重要边界：被测 run 已经运行在 subagent 里，因此如果某个 skill 的核心能力依赖“再开 subagent”来完成，
+        这条评测路径不能真实复现嵌套调度。
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>评测对象</th>
+            <th>启动方式</th>
+            <th>真正测什么</th>
+            <th>天然不擅长什么</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>能力质量 eval</td>
+            <td>主控 agent 启动 with-skill / baseline subagents</td>
+            <td>同一任务下，当前 skill 是否让最终产物更好、更稳定，成本是否可接受。</td>
+            <td>依赖再次启动 subagent 的 skill。被测 run 已经是 subagent，不能再开子 subagent，因此无法真实评估 orchestrator 型 skill 的调度质量。</td>
+          </tr>
+          <tr>
+            <td>description 触发 eval</td>
+            <td><code>scripts/run_eval.py</code> 调用命令行 <code>claude -p</code></td>
+            <td>某条用户 query 是否会触发这个 skill，是否误触发或漏触发。</td>
+            <td>skill 触发以后做得好不好，以及多轮对话过程质量。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>评估目录是后续工具的协议</h3>
+    <pre><code>invoice-extractor-workspace/                  # 这个 skill 的评估工作区
+└── iteration-1/                              # 一轮实验批次
+    ├── eval-vendor-tax-csv/                 # 一个具体测试用例
+    │   ├── eval_metadata.json               # eval id、名称、prompt、assertions
+    │   ├── with_skill/                      # 实验组：使用当前 skill
+    │   │   ├── outputs/                     # 最终产物，如 invoice.csv
+    │   │   ├── transcript.md                # 执行过程，grader 会读
+    │   │   ├── timing.json                  # token 和耗时
+    │   │   └── grading.json                 # grader 对 assertions 的判分
+    │   └── without_skill/                   # 对照组：不用 skill 或旧 skill
+    │       ├── outputs/
+    │       ├── transcript.md
+    │       ├── timing.json
+    │       └── grading.json
+    ├── benchmark.json                       # 机器可读聚合指标
+    └── benchmark.md                         # 人类可读聚合报告</code></pre>
+
+    <div class="artifact-grid">
+      <div class="artifact"><b>eval_metadata.json</b> 这个 eval 是什么：id、名称、prompt、assertions。</div>
+      <div class="artifact"><b>outputs/</b> 真正给用户看的产物，也是 viewer 的核心内容。</div>
+      <div class="artifact"><b>transcript.md</b> 执行过程证据。grader 不能只相信执行者声称完成了。</div>
+      <div class="artifact"><b>timing.json</b> subagent 完成通知里的 token 和耗时，只出现一次，所以要及时保存。</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>六、B Evaluate：grader、benchmark、viewer 三层判断</h2>
+    <p>
+      skill-creator 不把“模型说自己完成了”当成成功。它把评估拆成三层：
+      grader 看断言，benchmark 看整体指标，viewer 让人类看最终产物。
+    </p>
+
+    <div class="diagram">
+      <div class="diagram-title">图 5：从产物到决策的三层判断</div>
+      <svg viewBox="0 0 760 360" role="img" aria-label="grader benchmark viewer">
+        <defs>
+          <marker id="arrowJudge" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#276f86"></path>
+          </marker>
+        </defs>
+        <rect x="35" y="120" width="150" height="90" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
+        <text x="110" y="154" text-anchor="middle" font-size="14" font-weight="700">outputs + transcript</text>
+        <text x="110" y="180" text-anchor="middle" font-size="12">文件与过程证据</text>
+        <line x1="185" y1="165" x2="250" y2="165" stroke="#276f86" stroke-width="3" marker-end="url(#arrowJudge)"></line>
+        <rect x="260" y="90" width="145" height="150" rx="8" fill="#e8f1f5" stroke="#a9c5d0"></rect>
+        <text x="332" y="125" text-anchor="middle" font-size="15" font-weight="700">Grader</text>
+        <text x="332" y="153" text-anchor="middle" font-size="12">assertions 是否通过</text>
+        <text x="332" y="176" text-anchor="middle" font-size="12">证据来自文件/转录</text>
+        <text x="332" y="199" text-anchor="middle" font-size="12">也会指出 eval 太弱</text>
+        <line x1="405" y1="165" x2="470" y2="165" stroke="#276f86" stroke-width="3" marker-end="url(#arrowJudge)"></line>
+        <rect x="480" y="90" width="125" height="150" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
+        <text x="542" y="125" text-anchor="middle" font-size="15" font-weight="700">Benchmark</text>
+        <text x="542" y="153" text-anchor="middle" font-size="12">pass rate</text>
+        <text x="542" y="176" text-anchor="middle" font-size="12">time</text>
+        <text x="542" y="199" text-anchor="middle" font-size="12">token</text>
+        <line x1="605" y1="165" x2="660" y2="165" stroke="#276f86" stroke-width="3" marker-end="url(#arrowJudge)"></line>
+        <rect x="670" y="90" width="70" height="150" rx="8" fill="#fff4e6" stroke="#e0bc8d"></rect>
+        <text x="705" y="125" text-anchor="middle" font-size="15" font-weight="700">Viewer</text>
+        <text x="705" y="153" text-anchor="middle" font-size="12">人工看</text>
+        <text x="705" y="176" text-anchor="middle" font-size="12">给反馈</text>
+      </svg>
+      <p class="figure-caption">
+        这三层回答不同问题：grader 问“断言过了吗”，benchmark 问“整体是否比 baseline 好”，viewer 问“人真的满意吗”。
+      </p>
+    </div>
+
+    <pre><code>{
+  "expectations": [
+    {
+      "text": "CSV 包含 vendor、invoice_no、date、amount、tax、currency 六列",
+      "passed": true,
+      "evidence": "outputs/invoice.csv header contains all required columns"
+    },
+    {
+      "text": "缺失税号的发票必须标记 missing_tax_id",
+      "passed": false,
+      "evidence": "vendor-b row leaves the field blank without an explicit missing marker"
+    }
+  ],
+  "summary": "Most extraction fields are correct, but missing-field handling is inconsistent."
+}</code></pre>
+
+    <p>
+      benchmark 不是为了证明 with-skill 永远更好，而是为了量化取舍。一个 skill 可能用更多 token 和时间，
+      但换来更高通过率；也可能输出更漂亮，但断言没有提升。这些差异需要和用户一起判断。
+    </p>
+
+    <div class="diagram">
+      <div class="diagram-title">图 6：viewer 不是展示页，而是下一轮输入采集器</div>
+      <svg viewBox="0 0 760 260" role="img" aria-label="viewer feedback loop">
+        <defs>
+          <marker id="arrowView" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#276f86"></path>
+          </marker>
+        </defs>
+        <rect x="40" y="80" width="150" height="90" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
+        <text x="115" y="113" text-anchor="middle" font-size="14" font-weight="700">review HTML</text>
+        <text x="115" y="138" text-anchor="middle" font-size="12">输出 + 指标 + 对照</text>
+        <line x1="190" y1="125" x2="270" y2="125" stroke="#276f86" stroke-width="3" marker-end="url(#arrowView)"></line>
+        <rect x="280" y="80" width="150" height="90" rx="8" fill="#fff4e6" stroke="#e0bc8d"></rect>
+        <text x="355" y="113" text-anchor="middle" font-size="14" font-weight="700">human feedback</text>
+        <text x="355" y="138" text-anchor="middle" font-size="12">哪里不满意</text>
+        <line x1="430" y1="125" x2="510" y2="125" stroke="#276f86" stroke-width="3" marker-end="url(#arrowView)"></line>
+        <rect x="520" y="80" width="170" height="90" rx="8" fill="#eef4ef" stroke="#b8cdb4"></rect>
+        <text x="605" y="113" text-anchor="middle" font-size="14" font-weight="700">下一轮修改</text>
+        <text x="605" y="138" text-anchor="middle" font-size="12">SKILL.md / scripts / examples</text>
+      </svg>
+    </div>
+  </section>
+
+  <section>
+    <h2>七、C Trigger：description 优化器测的是路由</h2>
+    <p>
+      前两节测的是“skill 被使用以后做得好不好”。第七节测的是另一个问题：
+      这个 skill 到底该不该被唤起。这里的核心对象是 frontmatter 里的 <code>description</code>。
+    </p>
+
+    <div class="diagram">
+      <div class="diagram-title">图 7：description 是 skill 的路由规则</div>
+      <svg viewBox="0 0 760 300" role="img" aria-label="description routing">
+        <defs>
+          <marker id="arrowRoute" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#276f86"></path>
+          </marker>
+        </defs>
+        <rect x="40" y="110" width="150" height="75" rx="8" fill="#e8f1f5" stroke="#a9c5d0"></rect>
+        <text x="115" y="140" text-anchor="middle" font-size="14" font-weight="700">用户 query</text>
+        <text x="115" y="162" text-anchor="middle" font-size="12">真实表达 / 模糊说法</text>
+        <line x1="190" y1="147" x2="270" y2="147" stroke="#276f86" stroke-width="3" marker-end="url(#arrowRoute)"></line>
+        <rect x="280" y="90" width="170" height="115" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
+        <text x="365" y="123" text-anchor="middle" font-size="14" font-weight="700">available skills</text>
+        <text x="365" y="150" text-anchor="middle" font-size="12">name + description</text>
+        <text x="365" y="173" text-anchor="middle" font-size="12">模型判断是否打开</text>
+        <line x1="450" y1="125" x2="545" y2="95" stroke="#276f86" stroke-width="3" marker-end="url(#arrowRoute)"></line>
+        <line x1="450" y1="170" x2="545" y2="205" stroke="#276f86" stroke-width="3" marker-end="url(#arrowRoute)"></line>
+        <rect x="555" y="55" width="150" height="75" rx="8" fill="#eef4ef" stroke="#b8cdb4"></rect>
+        <text x="630" y="98" text-anchor="middle" font-size="15" font-weight="700">触发</text>
+        <rect x="555" y="175" width="150" height="75" rx="8" fill="#fff4e6" stroke="#e0bc8d"></rect>
+        <text x="630" y="218" text-anchor="middle" font-size="15" font-weight="700">不触发</text>
+      </svg>
+      <p class="figure-caption">
+        description 不是给人看的简介，而是模型决定“要不要打开这个 skill”的路由信号。
+      </p>
+    </div>
+
+    <h3>触发 eval 的样本长什么样</h3>
+    <p>
+      description eval query 要像真实用户会输入的话，包括上下文、文件名、业务目的、模糊表达、错别字和近似但不该触发的负样本。
+      负样本不能太容易，否则只能证明 description 没有离谱，不能证明边界写得好。
+    </p>
+
+    <pre><code>[
+  {
+    "query": "我老板刚发了一个 Q4 sales final FINAL v2.xlsx，让我加一列 profit margin，收入在 C 列，成本在 D 列",
+    "should_trigger": true
+  },
+  {
+    "query": "帮我解释一下 profit margin 是什么意思",
+    "should_trigger": false
+  },
+  {
+    "query": "我有几张 PDF 发票，想快速看一下总金额",
+    "should_trigger": false
+  }
+]</code></pre>
+
+    <h3>run_eval.py 如何判断“触发了”</h3>
+    <p>
+      <code>scripts/run_eval.py</code> 的做法不是让模型自我报告“我会不会触发”，而是跑一次真实的
+      <code>claude -p</code>。注意这和第五节的能力质量 eval 是两条路径；这里不启动 with-skill/baseline subagents，
+      也不评最终产物，只观察路由是否命中。
+    </p>
+
+    <div class="diagram">
+      <div class="diagram-title">图 8：run_eval.py 的触发检测机制</div>
+      <svg viewBox="0 0 760 300" role="img" aria-label="run eval trigger detection">
+        <defs>
+          <marker id="arrowRun" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#276f86"></path>
+          </marker>
+        </defs>
+        <rect x="35" y="105" width="140" height="80" rx="8" fill="#e8f1f5" stroke="#a9c5d0"></rect>
+        <text x="105" y="137" text-anchor="middle" font-size="14" font-weight="700">待测 description</text>
+        <text x="105" y="160" text-anchor="middle" font-size="12">每轮可能不同</text>
+        <line x1="175" y1="145" x2="235" y2="145" stroke="#276f86" stroke-width="3" marker-end="url(#arrowRun)"></line>
+        <rect x="245" y="90" width="150" height="110" rx="8" fill="#ffffff" stroke="#d8ddd2"></rect>
+        <text x="320" y="123" text-anchor="middle" font-size="14" font-weight="700">临时 command</text>
+        <text x="320" y="149" text-anchor="middle" font-size="12">.claude/commands</text>
+        <text x="320" y="172" text-anchor="middle" font-size="12">name 带随机 id</text>
+        <line x1="395" y1="145" x2="455" y2="145" stroke="#276f86" stroke-width="3" marker-end="url(#arrowRun)"></line>
+        <rect x="465" y="90" width="110" height="110" rx="8" fill="#fff4e6" stroke="#e0bc8d"></rect>
+        <text x="520" y="123" text-anchor="middle" font-size="14" font-weight="700">claude -p</text>
+        <text x="520" y="149" text-anchor="middle" font-size="12">stream-json</text>
+        <text x="520" y="172" text-anchor="middle" font-size="12">多次重复</text>
+        <line x1="575" y1="145" x2="635" y2="145" stroke="#276f86" stroke-width="3" marker-end="url(#arrowRun)"></line>
+        <rect x="645" y="90" width="90" height="110" rx="8" fill="#eef4ef" stroke="#b8cdb4"></rect>
+        <text x="690" y="123" text-anchor="middle" font-size="14" font-weight="700">检测事件</text>
+        <text x="690" y="149" text-anchor="middle" font-size="12">Skill / Read</text>
+        <text x="690" y="172" text-anchor="middle" font-size="12">命中 id</text>
+      </svg>
+    </div>
+
+    <h3>run_loop.py 如何避免 description 背题</h3>
+    <p>
+      如果只拿同一批 eval 不断优化，description 会越来越像那 20 条样本的关键词集合。
+      <code>run_loop.py</code> 会把 eval set 分成 train 和 held-out test：优化模型只根据 train 失败样本改写；
+      最终采用哪版 description，则看 test 分数。
+    </p>
+  </section>
+
+  <section>
+    <h2>八、D Ship：校验和打包成 .skill 文件</h2>
+    <p>
+      发布前会跑 <code>quick_validate.py</code>，检查 <code>SKILL.md</code> frontmatter 是否合规：
+      必须有 <code>name</code> 和 <code>description</code>，name 要是 kebab-case，description 不能包含尖括号且长度受限。
+    </p>
+    <p>
+      <code>package_skill.py</code> 会把最终 skill 打成 <code>.skill</code> 包，同时排除开发资产，例如
+      <code>evals/</code>、缓存文件和临时文件。这个选择很合理：eval 是开发过程资产，不一定要随最终能力包分发。
+    </p>
+  </section>
+
+  <section>
+    <h2>九、这个方案的局限性</h2>
+    <p>
+      Anthropic 这套方案强在把 skill 变成可评估的工程对象，但它不是万能测试框架。它默认最适合“单次任务执行型 skill”：
+      用户给一个 prompt，模型完成任务，产出文件或文本，然后 grader 和 viewer 评估结果。
+    </p>
+
+    <div class="warning callout">
+      <strong>局限 1：它不是多轮对话 harness。</strong>
+      <p>
+        对 SDD、需求澄清、访谈型 skill 来说，核心质量在多轮追问策略：是否先澄清、问什么、何时停止、如何根据用户回答更新需求状态。
+        当前 eval schema 主要是一个 <code>prompt</code> 加可选文件，不原生模拟“用户回答第二轮、第三轮”的过程。
+      </p>
+    </div>
+
+    <div class="warning callout">
+      <strong>局限 2：它不能真实评估嵌套 subagent 调度。</strong>
+      <p>
+        能力质量 eval 本身通过 subagent 执行 with-skill/baseline。由于 subagent 不能再开 subagent，
+        如果被测 skill 的核心是 orchestrator，例如需求澄清后分派多个专家 agent、项目管理 agent、TDD worker，
+        默认 creator eval 只能评最终近似结果，不能真实复现内部调度。
+      </p>
+    </div>
+
+    <p>
+      因此更准确的结论是：<code>skill-creator</code> 能很好评估“用了 skill 后结果是否更好”，
+      但不擅长评估“skill 内部的交互策略或 agent 调度策略是否更好”。
+    </p>
+  </section>
+
+  <section>
+    <h2>十、它体现的几个工程原则</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>原则</th>
+          <th>在 skill-creator 里的体现</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>把触发当路由问题</td>
+          <td><code>description</code> 是 primary trigger mechanism，所以有独立的 should-trigger / should-not-trigger eval、近似负样本和 train/test holdout。</td>
+        </tr>
+        <tr>
+          <td>用 baseline 控制自嗨</td>
+          <td>同一 prompt 跑 with-skill 和 baseline，避免只看“用了 skill 后看起来不错”。</td>
+        </tr>
+        <tr>
+          <td>用人工反馈弥补指标盲区</td>
+          <td>viewer 让用户直接看最终产物，并把反馈写回下一轮优化。</td>
+        </tr>
+        <tr>
+          <td>把重复劳动沉淀成资源</td>
+          <td>如果 eval transcript 中反复出现同类 helper script，说明应该沉淀到 skill 的 <code>scripts/</code>。</td>
+        </tr>
+        <tr>
+          <td>防止过拟合 eval</td>
+          <td>改进 skill 时要求从反馈中泛化；description 优化也用 held-out test 选择最佳版本。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>源码阅读索引</h2>
+    <ul>
+      <li><code>SKILL.md</code>：总控工作流，包含创建、评估、改进、description 优化、Claude.ai/Cowork 适配说明。</li>
+      <li><code>references/schemas.md</code>：所有 JSON 产物的契约。</li>
+      <li><code>agents/grader.md</code>：如何根据 outputs 和 transcript 判定 assertions。</li>
+      <li><code>agents/analyzer.md</code>：如何从 benchmark 和 transcript 中找模式、风险、非判别性 eval。</li>
+      <li><code>scripts/aggregate_benchmark.py</code>：聚合 pass rate、time、token。</li>
+      <li><code>scripts/run_eval.py</code>：通过 <code>claude -p</code> 和 stream-json 判断 description 是否触发。</li>
+      <li><code>scripts/run_loop.py</code>：串起 eval、改写、train/test holdout、HTML 报告和最佳选择。</li>
+      <li><code>eval-viewer/generate_review.py</code> 与 <code>eval-viewer/viewer.html</code>：生成可交互的输出审阅和 benchmark 页面。</li>
+      <li><code>scripts/quick_validate.py</code> 与 <code>scripts/package_skill.py</code>：发布前校验和打包。</li>
+    </ul>
+  </section>
+</article>
+</body>
+</html>
