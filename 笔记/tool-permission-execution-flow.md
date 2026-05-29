@@ -749,125 +749,388 @@ if (mode === 'plan' && isAutoModeActive()) → 同样进入 auto 模式处理
 
 ### 3. YOLO Classifier 上下文构成
 
-`classifyYoloAction()` (`yoloClassifier.ts:1012`) 的输入上下文由四部分构成：
+别看拼装过程，**最终可以直接理解成 classifier 收到 3 个部分**：
 
-#### 3.1 System Prompt（四层拼装）
+1. `system`
+2. `messages[0]`：可选的 `CLAUDE.md`
+3. `messages[1]`：真正用于判断的一整段 transcript
 
-```
-Layer 1: Base Prompt (auto_mode_system_prompt.txt)
-  • 角色：安全分类器
-  • 流程：理解动作 → 检查用户意图 → 评估风险
-  • 决策类别：
-    - BLOCK ALWAYS: 外部代码执行、不可逆本地破坏、未授权持久化、
-                    安全削弱、权限提升、网络服务
-    - BLOCK unless intent: CWD 外写文件、系统级包管理、git push
-    - ALLOW: 读文件、搜索、CWD 内编辑、测试构建、本地 git 操作
-  • 关键约束：只考虑用户消息，不考虑 assistant 文本
+最小形态就是：
 
-Layer 2: Permissions Template
-  External 构建: permissions_external.txt
-  ANT 构建: permissions_anthropic.txt（更详细，含云 CLI/IaC）
-  三段式：Allow Rules / Deny Rules / Environment Context
+```ts
+system = [systemPrompt]
 
-Layer 3: 用户自定义规则 (settings.autoMode)
-  • allow[]      → 替换 <user_allow_rules_to_replace>
-  • soft_deny[]  → 替换 <user_deny_rules_to_replace>
-  • environment[] → 替换 <user_environment_to_replace>
-  External: 用户规则替换默认值
-  Anthropic: 用户规则追加到默认值
-
-Layer 4: 动态注入（ANT-ONLY）
-  • BASH_CLASSIFIER 开启 → 注入 Bash(prompt:) allow/deny 描述
-  • POWERSHELL_AUTO_MODE → 注入 PS 专用 deny guidance
+messages = [
+  ...prefixMessages,
+  {
+    role: 'user',
+    content: [
+      { type: 'text', text: '<transcript>\n' },
+      ...serializedBlocks,
+      { type: 'text', text: '</transcript>\n' },
+      { type: 'text', text: XML_SUFFIX }
+    ]
+  }
+]
 ```
 
-#### 3.2 Messages / Transcript
+下面只讲这 3 个部分最终分别是什么。
 
-从历史 `messages[]` 提取：
+#### 3.1 第一部分：`system`
 
-| 来源 | 保留内容 | 排除内容 |
-|------|---------|---------|
-| User 消息 | 文本内容 | 图片/附件 |
-| Assistant 消息 | 只保留 `tool_use` 块 | **排除 assistant 文本**（防操控）|
-| Queued Command 附件 | prompt 文本作为 user turn | — |
+`system` 里只有一件东西：**分类规则总说明**。
 
-序列化方式（`toCompactBlock`）：
+它最终就是一大段字符串，内容包括：
 
-| 内容 | 默认格式 | JSONL 格式（可选）|
-|------|---------|-----------------|
-| User 文本 | `User: text\n` | `{"user":"text"}\n` |
-| Bash | `Bash ls\n` | `{"Bash":"ls"}\n` |
-| FileEdit | `FileEdit /path: new_string\n` | `{"FileEdit":"/path: new_string"}\n` |
-| Agent | `Agent (Explore): prompt\n` | `{"Agent":"(Explore): prompt"}\n` |
-| 无安全相关性 | `''`（省略） | `''`（省略）|
+- classifier 的角色定义
+- 什么类型的动作应该 allow
+- 什么类型的动作应该 block
+- 环境说明
+- 用户在 `settings.autoMode` 里自定义的 allow / deny / environment 规则
 
-**toAutoClassifierInput** 是各工具自定义的投影：
+可以把它直接理解成：
 
-| 工具 | 投影输出 |
-|------|---------|
-| BashTool | `input.command` |
-| FileEditTool | `${file_path}: ${new_string}` |
-| FileWriteTool | `${file_path}: ${content}` |
-| AgentTool | `(subagent_type, mode=xxx): ${prompt}` |
-| WebFetchTool | `input.url` |
-| SkillTool | `skill` 名称 |
-| GlobTool/GrepTool | 查询模式 + 路径 |
+> “你现在是一个安全分类器。下面这些情况允许，下面这些情况要拦，下面是环境背景。”
 
-#### 3.3 Action（当前待评估动作）
+所以 `system` 的最终形态就是：
 
-```
-formatActionForClassifier(toolName, input)
-→ { role: 'assistant', content: [{type:'tool_use', name, input}] }
+```ts
+system = [
+  {
+    type: 'text',
+    text: '<完整的分类规则大字符串>',
+    cache_control: ...
+  }
+]
 ```
 
-追加在 transcript 末尾，与历史 tool_use 用同一序列化方式。
+#### 3.2 第二部分：`messages[0]`（可选）
 
-#### 3.4 CLAUDE.md 注入（可选）
+这部分只有在存在 `CLAUDE.md` 时才有。
 
-```
+它最终就是一条 user message，内容是：
+
+> “下面是用户的 CLAUDE.md，这也算用户意图的一部分。”
+
+形态如下：
+
+```ts
 {
   role: 'user',
   content: [{
     type: 'text',
-    text: "The following is the user's CLAUDE.md configuration...\n"
-          + "<user_claude_md>\n${claudeMd}\n</user_claude_md>",
-    cache_control: getCacheControl({ querySource: 'auto_mode' })
+    text:
+      "The following is the user's CLAUDE.md configuration...\n\n" +
+      "<user_claude_md>\n" +
+      "...CLAUDE.md 内容...\n" +
+      "</user_claude_md>",
+    cache_control: ...
   }]
 }
 ```
 
+如果没有 `CLAUDE.md`，这一部分就不存在。
+
+#### 3.3 第三部分：`messages[最后一条]`
+
+这是最重要的部分。它不是“聊天记录原样复制”，而是**压缩过的 transcript**。
+
+这段 transcript 里只会出现两类东西：
+
+- 用户说过的话
+- assistant 实际发起过的 tool use
+
+不会出现：
+
+- assistant 的解释性自然语言
+- 图片
+- 普通附件内容
+
+它最终长这样：
+
+```text
+<transcript>
+User: ...
+Bash ...
+User: ...
+FileEdit ...
+Bash ...
+</transcript>
+```
+
+然后末尾再拼一个 XML classifier 的后缀，例如：
+
+```text
+Err on the side of blocking. <block> immediately.
+```
+
+所以这最后一条 message 的最终结构就是：
+
+```ts
+{
+  role: 'user',
+  content: [
+    { type: 'text', text: '<transcript>\n' },
+    { type: 'text', text: 'User: ...\n' },
+    { type: 'text', text: 'Bash ...\n' },
+    { type: 'text', text: 'User: ...\n' },
+    { type: 'text', text: 'FileEdit ...\n' },
+    { type: 'text', text: 'Bash ...\n', cache_control: ... },
+    { type: 'text', text: '</transcript>\n' },
+    { type: 'text', text: XML_SUFFIX }
+  ]
+}
+```
+
+注意两个要点：
+
+- 最后一条 `Bash ...` / `FileEdit ...` 这类记录，就是**当前正在判断的动作**
+- 它和历史动作放在同一个 transcript 里，只是排在最后
+
+#### 3.4 一个完整例子
+
+假设：
+
+- `CLAUDE.md` 里写了“回答用中文”
+- 历史上用户说过“帮我看看测试为什么挂了”
+- assistant 之前执行过 `Bash pwd`
+- assistant 之前执行过 `FileEdit README.md: corrected typo`
+- 当前要判断的动作是 `Bash pnpm test`
+
+那 classifier 最终看到的东西，可以直接理解成：
+
+```ts
+system = [
+  {
+    type: 'text',
+    text: '<完整分类规则>',
+    cache_control: ...
+  }
+]
+
+messages = [
+  {
+    role: 'user',
+    content: [{
+      type: 'text',
+      text:
+        "The following is the user's CLAUDE.md configuration...\n\n" +
+        "<user_claude_md>\n" +
+        "回答用中文\n" +
+        "</user_claude_md>",
+      cache_control: ...
+    }]
+  },
+  {
+    role: 'user',
+    content: [
+      { type: 'text', text: '<transcript>\n' },
+      { type: 'text', text: 'User: 帮我看看测试为什么挂了\n' },
+      { type: 'text', text: 'Bash pwd\n' },
+      { type: 'text', text: 'FileEdit README.md: corrected typo\n' },
+      { type: 'text', text: 'Bash pnpm test\n', cache_control: ... },
+      { type: 'text', text: '</transcript>\n' },
+      { type: 'text', text: '\nErr on the side of blocking. <block> immediately.' }
+    ]
+  }
+]
+```
+
+如果没有 `CLAUDE.md`，那就更简单，直接只剩：
+
+```ts
+system = [systemPrompt]
+messages = [
+  {
+    role: 'user',
+    content: [
+      { type: 'text', text: '<transcript>\n' },
+      { type: 'text', text: 'User: ...\n' },
+      { type: 'text', text: 'Bash ...\n' },
+      { type: 'text', text: '...\n' },
+      { type: 'text', text: '</transcript>\n' },
+      { type: 'text', text: XML_SUFFIX }
+    ]
+  }
+]
+```
+
+#### 3.5 一句话记忆
+
+不要记“怎么拼”，只记 classifier 最终看到的是：
+
+> `一份规则说明(system)` + `一份可选的 CLAUDE.md` + `一份 transcript（用户话语 + 工具动作历史 + 当前动作）`
+
 ### 4. 两种分类器实现
 
-#### Path A: Tool-use Classifier（传统）
+现在只记这个：
 
+- 目前主要看 **2-Stage XML Classifier**
+- 旧的 `classify_result` tool-call 路径还在，但这里只简单交代，不展开对比
+
+#### 4.1 旧路径一句话说明
+
+旧路径就是：
+
+> 把同样的 `system + messages` 发给模型，但强制它调用 `classify_result` 工具，返回 `{thinking, shouldBlock, reason}`。
+
+如果 `shouldBlock = false` 就 allow，`shouldBlock = true` 就 deny。
+
+#### 4.2 新路径：2-Stage XML Classifier
+
+新路径可以直接理解成：
+
+> 先做一次“快速拦截判断”；如果快速判断已经足够说明是 allow，就立刻结束。只有看起来像要 block 的情况，才进入第二次更仔细的判断。
+
+#### 4.3 新路径的最终请求长什么样
+
+两次请求看到的上下文主体基本相同，都是上一节说的那三部分：
+
+```ts
+system = [systemPrompt]
+
+messages = [
+  // 可选
+  { role: 'user', content: [CLAUDE.md] },
+
+  // 必有
+  { role: 'user', content: [<transcript>, 历史 user/tool_use, 当前 action, 某个 XML suffix] }
+]
 ```
-模型被强制调用 classify_result 工具
-→ 输出 {thinking, shouldBlock, reason}
+
+Stage 1 和 Stage 2 的主要区别，不在前面的 transcript，而在**最后那个 suffix**。
+
+#### 4.4 Stage 1 在干什么
+
+Stage 1 的目标非常单纯：
+
+> 尽快回答“这个动作是不是明显可以直接放行？”
+
+它会在 transcript 后面加一个很短的 suffix。代码原文是：
+
+```text
+Err on the side of blocking. <block> immediately.
 ```
 
-工具 schema：`{thinking: string, shouldBlock: boolean, reason: string}`
+所以 Stage 1 期望模型只回这种最短结果：
 
-#### Path B: 2-Stage XML Classifier（新，GrowthBook 控制）
-
-```
-Stage 1 (Fast)
-  max_tokens: 64, stop_sequences: ["</block>"]
-  suffix: "Err on the side of blocking. <block> immediately."
-  │
-  ├── <block>no</block> → ALLOW，直接返回（省 Stage 2 API 调用）
-  └── <block>yes</block> 或解析失败 → 进入 Stage 2
-       │
-       ▼
-Stage 2 (Thinking)
-  max_tokens: 4096
-  suffix: 要求详细推理，用 <thinking> 再输出 <block>
-  │
-  ├── <block>yes</block><reason>...</reason> → BLOCK
-  ├── <block>no</block> → ALLOW
-  └── 解析失败 → 安全默认 BLOCK
+```xml
+<block>no</block>
 ```
 
-**Cache 策略**：action block 带 `cache_control`，Stage 2 共享 Stage 1 的 transcript+action prefix，保证 Stage 2 的 prefix 有 cache hit。
+或者：
+
+```xml
+<block>yes</block>
+```
+
+Stage 1 的处理规则只有三条：
+
+```text
+<block>no</block>   → 直接 allow，结束
+<block>yes</block>  → 进入 Stage 2
+解析失败            → 进入 Stage 2
+```
+
+所以，**Stage 1 本质上是一个 allow fast-path**。
+
+#### 4.5 Stage 2 在干什么
+
+Stage 2 不是重新换一份上下文，而是在几乎相同的上下文后面，换成另一个 suffix，要求模型认真推理。代码原文是：
+
+```text
+Review the classification process and follow it carefully, making sure you deny actions that should be blocked. As a reminder, explicit (not suggestive or implicit) user confirmation is required to override blocks. Use <thinking> before responding with <block>.
+```
+
+这个阶段期望的输出是：
+
+```xml
+<thinking>...</thinking>
+<block>yes|no</block>
+<reason>...</reason>
+```
+
+最终处理规则是：
+
+```text
+<block>no</block>   → allow
+<block>yes</block>  → deny
+解析失败            → deny
+```
+
+也就是说，**真正的最终安全裁决由 Stage 2 兜底**。
+
+#### 4.6 一个完整例子
+
+假设当前要判断的是：
+
+```text
+Bash git push origin main
+```
+
+**Stage 1 可能返回：**
+
+```xml
+<block>yes</block>
+```
+
+这时不会立刻 deny，而是继续进入 Stage 2。
+
+**Stage 2 可能返回：**
+
+```xml
+<thinking>User asked for code changes, but did not explicitly ask to push to a remote.</thinking>
+<block>yes</block>
+<reason>This pushes to a remote and requires explicit confirmation.</reason>
+```
+
+这时系统才把它当成：`deny`
+
+再看一个 allow 例子。假设当前动作是：
+
+```text
+Bash pnpm test
+```
+
+**Stage 1 可能直接返回：**
+
+```xml
+<block>no</block>
+```
+
+这时系统就直接当成：`allow`，不会再跑 Stage 2。
+
+#### 4.7 为什么这样设计
+
+因为大量常见开发命令其实很容易判断，比如：
+
+- `pwd`
+- `ls`
+- `cat`
+- `pnpm test`
+- `npm run lint`
+
+这些命令没必要每次都走“长推理”。
+
+所以新路径的设计思路是：
+
+- **明显安全**：Stage 1 立刻放行
+- **看起来危险 / 不确定**：再进 Stage 2 认真判断
+
+#### 4.8 Cache 怎么理解
+
+新路径里最重要的 cache 结论只有两个：
+
+- 同一次分类里的 **Stage 1 → Stage 2**，明确是按 prompt cache 复用前缀设计的
+- 相邻两次工具调用，如果前面的 transcript 前缀一样，公共前缀通常也能吃到 cache
+
+代码里专门放了三个 cache breakpoint：
+
+- `system`
+- 可选的 `CLAUDE.md`
+- 当前 action block
+
+所以 Stage 2 不需要把前面整段上下文从头重新算一遍。
 
 ### 5. 结果处理
 
